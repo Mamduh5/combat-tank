@@ -5,15 +5,15 @@
  * editing gameplay code, and every handling number the simulation uses must come from here rather
  * than from a constant buried in a system.
  *
- * The schema covers what the simulation actually reads, and nothing more. Armour plates, hit points
- * and modules are named in `docs/technical-direction.md` §8 as part of the eventual shape, but they
- * are added in V3 when there is something to consume them — a field nothing reads is a field that
- * only drifts out of date. V2 added the turret, main gun and test shell sections for the same reason:
- * each one is read by a system that exists.
+ * The schema covers what the simulation actually reads, and nothing more. The turret, main gun and
+ * test shell arrived in V2; armour, survivability and modules arrive in V3 — each one added at the
+ * version that has a system reading it, because a field nothing reads is a field that only drifts
+ * out of date.
  *
- * Units are part of the field name (`Mps`, `Deg`, `Kg`, `M`, `Sec`) so a value's unit is always
+ * Units are part of the field name (`Mps`, `Deg`, `Kg`, `M`, `Sec`, `Mm`) so a value's unit is always
  * visible at the call site. `docs/assumptions.md` A-01 fixes the unit conventions.
  */
+import type { Vec3 } from './vec3.js';
 
 /** Hull dimensions and ride height, in metres. */
 export interface VehicleDimensions {
@@ -170,6 +170,151 @@ export interface TestShellDefinition {
    * surface undetected. See `src/core/ballistics/shell.ts`.
    */
   readonly maxSubstepM: number;
+  /**
+   * Nominal penetration against vertical armour at `PenetrationModel.referenceVelocityMps`, in
+   * millimetres of armour (A-01).
+   *
+   * Added in V3 as the shell's capability against a vehicle. It is deliberately the *only* capability
+   * number: a real shell's penetration depends on its own construction in ways a single figure cannot
+   * express, and V3 has no armour model to tune against yet. See ADR-0012.
+   */
+  readonly nominalPenetrationMm: number;
+  /**
+   * How well the shell resists angle, in `[0, 1]`.
+   *
+   * **0** means the shell gets no benefit from its own normalisation: a sloped hit costs it exactly
+   * what the geometry costs. **1** means full normalisation, so an angled hit is as capable as a flat
+   * one and only the ricochet rule protects the armour. Values between blend the two.
+   *
+   * A single scalar for V3 rather than a per-angle curve. The owner asked for the minimum coherent
+   * version, and a curve would be a balance surface with nothing yet to balance against.
+   */
+  readonly normalization: number;
+}
+
+/**
+ * Where a plate is mounted on the vehicle.
+ *
+ * A hull plate turns with the hull; a turret plate turns with the turret, which is what makes "shoot
+ * the turret face" a distinct outcome from "shoot the hull front" even when both are square-on.
+ */
+export type ArmorMount = 'hull' | 'turret';
+
+/**
+ * A single armour plate.
+ *
+ * Modelled as an oriented slab with a *thickness*, positioned in **vehicle local space**. That shape
+ * was chosen over curved or multi-faceted hulls because it is:
+ *
+ *  - **legible.** A designer can read a plate list and picture the vehicle, which is what makes the
+ *    armour model learnable (vision principle P6) rather than a black box.
+ *  - **exactly testable.** Ray-versus-oriented-box has a closed-form solution, so hit resolution has
+ *    no sampling rate and no tunnelling ambiguity.
+ *  - **cheap.** A dozen slab tests per impact is nothing, and it runs in the simulation core with no
+ *    dependency on the render or physics meshes (ADR-0007).
+ *
+ * The cost is that compound-sloped armour is not representable. That is a V3 prototype trade recorded
+ * in ADR-0012, and a finer representation can replace this without changing how penetration is
+ * computed from the result.
+ */
+export interface ArmorPlate {
+  /** Unique within a vehicle. Referenced by the HUD and by tests. */
+  readonly id: string;
+  /**
+   * Region label such as `hull-front` or `turret-side`.
+   *
+   * A free-form string rather than an enum on purpose: the set of regions a future vehicle wants is
+   * not decided, and a closed union would need editing every time one is added.
+   */
+  readonly region: string;
+  /** Whether this plate follows the hull or the turret. */
+  readonly mount: ArmorMount;
+  /** Nominal armour thickness in millimetres (A-01). */
+  readonly thicknessMm: number;
+  /**
+   * Centre of the plate's **outer surface**, in vehicle local space, metres.
+   *
+   * Vehicle local space has its origin at the centre of the hull floor, +Z forward, +X right,
+   * +Y up. Stated here because every plate position depends on it.
+   */
+  readonly centerM: Vec3;
+  /** Plate width across its surface, metres. */
+  readonly widthM: number;
+  /** Plate height along its surface, metres. */
+  readonly heightM: number;
+  /** Tilt about the vertical axis, degrees. Positive turns the face to the right. */
+  readonly yawDeg: number;
+  /** Tilt about the plate's own horizontal axis, degrees. Positive leans the top back. */
+  readonly pitchDeg: number;
+}
+
+/**
+ * What damaging a module does, at prototype scope.
+ *
+ * The effects are deliberately coarse. V3 exists to prove that penetrating a specific place can
+ * affect a specific thing, not to simulate a tank. `none` means the module takes damage and nothing
+ * else happens yet, which is the honest state for a consequence that would meaningfully expand the
+ * version.
+ */
+export type ModuleEffect = 'engine' | 'track' | 'gun' | 'ammunition' | 'none';
+
+/** A damageable sub-system with a position, so a hit near it can plausibly damage it. */
+export interface ModuleDefinition {
+  readonly id: string;
+  /** Human-readable name for the HUD and debug output. */
+  readonly label: string;
+  /** Module hit points. At zero the module is destroyed. */
+  readonly hitPoints: number;
+  /** Centre of the module in vehicle local space, metres. Same origin as plates. */
+  readonly centerM: Vec3;
+  /**
+   * How far from the module's centre a penetration still counts, metres.
+   *
+   * This is what gives module damage **spatial meaning**: the shell has to actually go near the
+   * engine to hurt it. A sphere rather than a region test because it is simple, symmetric, and cannot
+   * be configured into a nonsensical overlapping mess.
+   */
+  readonly radiusM: number;
+  /** Consequence once this module is destroyed. */
+  readonly effect: ModuleEffect;
+}
+
+/** Survivability: hit points, penetrating damage, and the modules that take part. */
+export interface VehicleSurvivability {
+  readonly hitPoints: number;
+  /**
+   * Damage applied per successful penetration, hit points.
+   *
+   * A **fixed** value on purpose. The owner allowed randomised penetration but preferred
+   * deterministic fixed values absent a gameplay reason, and a fixed number keeps V3 reproducible
+   * and its tests exact.
+   */
+  readonly damagePerPenetration: number;
+  readonly modules: readonly ModuleDefinition[];
+}
+
+/**
+ * How penetration and ricochet are resolved.
+ *
+ * Deliberately separate from both the shell and the vehicle, because the *rules* belong to neither:
+ * the shell carries capability, the vehicle carries resistance, and this carries the rules that
+ * compare them.
+ */
+export interface PenetrationModel {
+  /**
+   * Speed at which a shell's nominal penetration applies unchanged, m/s.
+   *
+   * Penetration scales with the ratio of impact speed to this, so a shell that has dropped over a long
+   * flight arrives with slightly less than its quoted capability.
+   */
+  readonly referenceVelocityMps: number;
+  /**
+   * Incidence angle at or above which a shell ricochets instead of penetrating, degrees.
+   *
+   * A **temporary engineering value**, not a balance decision. It is data rather than a constant so
+   * that tuning it later is an edit to a vehicle file and not a code change.
+   */
+  readonly ricochetThresholdDeg: number;
 }
 
 export interface VehicleDefinition {
@@ -181,8 +326,14 @@ export interface VehicleDefinition {
   readonly ground: VehicleGroundInteraction;
   readonly turret: VehicleTurret;
   readonly mainGun: VehicleMainGun;
-  /** The single generic test shell this vehicle fires in V2. */
+  /** The single generic test shell this vehicle fires in V2/V3. */
   readonly mainShell: TestShellDefinition;
+  /** Hit points, penetrating damage, and module layout. Added in V3. */
+  readonly survivability: VehicleSurvivability;
+  /** Armour plate layout. Added in V3. */
+  readonly armor: readonly ArmorPlate[];
+  /** The rules for comparing shell capability against armour resistance. Added in V3. */
+  readonly penetration: PenetrationModel;
   /**
    * Id of the mesh the client should build. Referenced by id, not embedded, so placeholder
    * geometry can be replaced with real art without touching the data model.

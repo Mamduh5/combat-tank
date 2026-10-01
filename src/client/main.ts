@@ -2,6 +2,7 @@ import { Engine } from '@babylonjs/core/Engines/engine.js';
 import { Simulation } from '../core/sim/world.js';
 import { reloadProgress } from '../core/vehicle/main-gun.js';
 import { PLACEHOLDER_TANK } from '../shared/placeholder-tank.js';
+import { TARGET_TANK } from '../shared/placeholder-target.js';
 import type { Vec3 } from '../shared/vec3.js';
 import { OrbitCamera } from './camera/orbit-camera.js';
 import { InputManager } from './input/input-manager.js';
@@ -53,7 +54,12 @@ async function bootstrap(): Promise<void> {
   const hud = new Hud();
 
   // --- Simulation (headless core) ----------------------------------------------------
-  const simulation = new Simulation({ vehicle: PLACEHOLDER_TANK });
+  const simulation = new Simulation({
+    vehicle: PLACEHOLDER_TANK,
+    // The stationary test target. It does not move, aim, or fire — it exists so armour, penetration
+    // and damage can be tested by hand. V4 is where a real opponent arrives.
+    target: TARGET_TANK,
+  });
 
   // --- Physics (Rapier, for queries only) --------------------------------------------
   // Initialising this decodes an inlined WASM module, so it is awaited before the first frame.
@@ -67,6 +73,13 @@ async function bootstrap(): Promise<void> {
   const tankVisual = new TankVisual(scene, simulation.vehicle.definition);
   const orbitCamera = new OrbitCamera(camera, physics);
   const effects = new ShellEffects(scene);
+
+  // The stationary test target, drawn from the same visual code as the player's tank, so a change to
+  // the placeholder model applies to both and nothing about rendering the target is special-cased.
+  const targetVisual =
+    simulation.target === null
+      ? null
+      : new TankVisual(scene, simulation.target.definition);
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
@@ -115,6 +128,11 @@ async function bootstrap(): Promise<void> {
 
     // 5. Copy simulation state onto the view. The renderer only ever reads.
     tankVisual.apply(state, simulation.vehicle.turretState);
+    if (targetVisual !== null && simulation.target !== null) {
+      targetVisual.apply(simulation.target.state, simulation.target.turretState);
+      // A destroyed target is visibly a wreck, so the outcome is legible without reading the panel.
+      targetVisual.setDestroyed(simulation.target.damage.destroyed);
+    }
     orbitCamera.update(
       { x: state.position.x, y: state.position.y, z: state.position.z },
       input.consumeLookDelta(),
@@ -142,6 +160,17 @@ async function bootstrap(): Promise<void> {
       reloadProgress(simulation.vehicle.gunState, simulation.vehicle.definition.mainGun.reloadSeconds),
       reloading,
     );
+
+    // 8. Hit feedback, from the most recent combat outcome. Only rewritten when a shell actually
+    //    resolved, so the panel keeps showing the last shot rather than flickering every frame.
+    if (simulation.combat.length > 0) {
+      const outcome = simulation.combat[simulation.combat.length - 1]!;
+      hud.updateHitFeedback(
+        outcome,
+        simulation.target?.damage.hitPoints ?? 0,
+        outcome.kind === 'penetrated' ? outcome.damage.modulesDestroyed : [],
+      );
+    }
 
     // Accumulate distance driven, and retire the control hint once the player is moving.
     distanceDrivenM += Math.hypot(

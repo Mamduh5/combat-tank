@@ -68,6 +68,32 @@ export type ShellStepResult =
       readonly reason: 'range' | 'lifetime';
     };
 
+/**
+ * Something a shell can strike, supplied by the simulation so this module stays ignorant of vehicles.
+ *
+ * Defined as an interface rather than importing a vehicle class, for the same reason the terrain is
+ * passed in: `shell.ts` must not need to know what a tank is. That keeps the ballistics testable with a
+ * trivial stub, and it means V3's armour system can evolve without the integrator changing.
+ *
+ * ## Segment, not point
+ *
+ * The tester receives the **segment travelled this sub-step**, not a position. At 800 m/s a shell
+ * covers ~13 m per tick, so a point test would let it pass clean through a tank. Testing the segment
+ * means a fast shell cannot tunnel, at any speed.
+ */
+export interface ShellObstacle {
+  /** Id of the vehicle, reported on the impact so a consumer can attribute the hit. */
+  readonly vehicleId: string;
+
+  /**
+   * Finds where a shell travelling from `from` to `to` first meets this obstacle, or `null`.
+   *
+   * @param from start of the sub-step, world space
+   * @param to end of the sub-step, world space
+   */
+  hitSegment(from: Vec3, to: Vec3): { point: Vec3; normal: Vec3 } | null;
+}
+
 /** Creates a shell at the muzzle, travelling along `direction` at the definition's velocity. */
 export function createShell(
   id: number,
@@ -119,6 +145,7 @@ export function stepShell(
   definition: TestShellDefinition,
   terrain: Terrain,
   dtSeconds: number,
+  obstacles: readonly ShellObstacle[] = EMPTY_OBSTACLES,
 ): ShellStepResult {
   // --- Expiry checks first ----------------------------------------------------------
   // Checked before the shell moves, so a shell cannot be reported as impacting in the same tick it
@@ -148,6 +175,41 @@ export function stepShell(
       shell.position.z + velocity.z * subDt,
     );
 
+    // --- Vehicle test -------------------------------------------------------------------
+    // Tested *before* the ground, because a shell that reaches a vehicle before the terrain should
+    // hit the vehicle. Segment-based, so a fast shell cannot pass through one.
+    const obstacleHit = firstObstacleHit(obstacles, shell.position, next);
+    if (obstacleHit !== null) {
+      const impactVelocity = vec3(velocity.x, velocity.y, velocity.z);
+      const incomingDirection = unitOr(impactVelocity, vec3(0, 0, 1));
+
+      // Advance the clock by only the fraction of the sub-step the shell actually completed, so the
+      // impact's flight time and distance match where it ended up rather than overstating both.
+      const travelledFraction = fractionTravelled(shell.position, obstacleHit.point, velocity, subDt);
+      shell.position = obstacleHit.point;
+      advanceClock(shell, subDt * travelledFraction);
+      return {
+        kind: 'impacted',
+        impact: {
+          shellId: shell.id,
+          shellTypeId: shell.shellTypeId,
+          shooterId: shell.shooterId,
+          position: obstacleHit.point,
+          // The obstacle's own normal, so the incidence angle reflects the surface actually struck.
+          surfaceNormal: obstacleHit.normal,
+          targetKind: 'vehicle',
+          targetId: obstacleHit.targetId,
+          incomingDirection,
+          impactVelocity,
+          incidenceAngleDeg: computeIncidenceAngleDeg(incomingDirection, obstacleHit.normal),
+          flightTimeSeconds: shell.flightTimeSeconds,
+          distanceTravelledM: shell.distanceTravelledM,
+          shellMassKg: shell.massKg,
+          muzzleVelocityMps: shell.muzzleVelocityMps,
+        },
+      };
+    }
+
     // --- Ground test ------------------------------------------------------------------
     // Against the analytic surface rather than a collision mesh, for the same reason the vehicle
     // is: the analytic function is exact, so a shell cannot land in a quantisation step or jitter
@@ -167,6 +229,67 @@ export function stepShell(
   }
 
   return { kind: 'flying' };
+}
+
+/** Shared empty obstacle list, so a shell fired at bare terrain allocates nothing. */
+const EMPTY_OBSTACLES: readonly ShellObstacle[] = Object.freeze([]);
+
+/** An obstacle hit, plus which obstacle it was. */
+interface ObstacleHit {
+  readonly point: Vec3;
+  readonly normal: Vec3;
+  readonly targetId: string;
+}
+
+/**
+ * Finds the nearest obstacle a shell's sub-step segment meets.
+ *
+ * Each obstacle reports its own hit point; the nearest across all obstacles wins, because two vehicles
+ * can overlap on screen and the shell must hit whichever surface it reaches first.
+ */
+function firstObstacleHit(
+  obstacles: readonly ShellObstacle[],
+  from: Vec3,
+  to: Vec3,
+): ObstacleHit | null {
+  let best: ObstacleHit | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const obstacle of obstacles) {
+    const hit = obstacle.hitSegment(from, to);
+    if (hit === null) {
+      continue;
+    }
+    const distance = magnitude(vec3(hit.point.x - from.x, hit.point.y - from.y, hit.point.z - from.z));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = {
+        point: hit.point,
+        normal: hit.normal,
+        targetId: obstacle.vehicleId,
+      };
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Fraction of a sub-step a shell completed before meeting an obstacle.
+ *
+ * The obstacle reports *where* along the segment it was struck, so the elapsed fraction is just how far
+ * along it got relative to the segment's full length. Reported on the impact record, so being exact
+ * costs nothing.
+ */
+function fractionTravelled(from: Vec3, hit: Vec3, velocity: Vec3, subDt: number): number {
+  const fullLength = magnitude(velocity) * subDt;
+  if (fullLength <= 0) {
+    return 1;
+  }
+  const travelled = Math.sqrt(
+    (hit.x - from.x) ** 2 + (hit.y - from.y) ** 2 + (hit.z - from.z) ** 2,
+  );
+  return Math.max(0, Math.min(1, travelled / fullLength));
 }
 
 /** Adds elapsed time and the distance just covered to the shell's clock and odometer. */

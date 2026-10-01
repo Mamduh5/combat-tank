@@ -4,6 +4,7 @@ import {
   validateVehicleDefinition,
 } from '../../src/shared/vehicle-definition-schema.js';
 import { AVAILABLE_VEHICLE_IDS, PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
@@ -90,9 +91,19 @@ describe('validation rejects bad definitions', () => {
     expect(result.errors.join('\n')).toMatch(/massKg/);
   });
 
-  it('rejects a zero top speed, which would make the vehicle undrivable', () => {
+  it('accepts a zero top speed, which now describes a stationary vehicle', () => {
+    // Changed in V3. This was rejected while every vehicle moved; the V3 test target does not, and a
+    // schema that forbids static vehicles would block any future emplacement too.
     const def = validDefinition();
     (def.powertrain as { maxSpeedMps: number }).maxSpeedMps = 0;
+    (def.powertrain as { maxReverseSpeedMps: number }).maxReverseSpeedMps = 0;
+
+    expect(validateVehicleDefinition(def).valid).toBe(true);
+  });
+
+  it('still rejects a negative top speed, which is not a speed at all', () => {
+    const def = validDefinition();
+    (def.powertrain as { maxSpeedMps: number }).maxSpeedMps = -5;
     expect(validateVehicleDefinition(def).valid).toBe(false);
   });
 
@@ -153,10 +164,17 @@ describe('V2 gunnery data', () => {
   // avoid asserting any particular number. What they do assert is that the relationships the
   // simulation depends on actually hold, so a careless future edit is caught.
 
-  it('keeps the traverse arc inside a full turn', () => {
-    const { maxTraverseDeg } = PLACEHOLDER_TANK.turret;
-    expect(maxTraverseDeg).toBeGreaterThan(0);
-    expect(maxTraverseDeg).toBeLessThan(360);
+  it('gives the placeholder a full 360-degree traverse ring', () => {
+    // Owner's V3 decision: the generic placeholder has no arbitrary traverse stop. A full ring is
+    // now the expected value, not merely an upper bound.
+    expect(PLACEHOLDER_TANK.turret.maxTraverseDeg).toBe(360);
+  });
+
+  it('still supports a restricted traverse arc, for casemate-style vehicles', () => {
+    // The model must be able to express a limited gun arc, or a future fixed-superstructure vehicle
+    // would need a schema change. The V3 target tank exercises exactly this.
+    expect(TARGET_TANK.turret.maxTraverseDeg).toBeLessThan(360);
+    expect(TARGET_TANK.turret.maxTraverseDeg).toBeGreaterThan(0);
   });
 
   it('keeps elevation and depression within a physically sensible range', () => {
@@ -197,7 +215,25 @@ describe('V2 gunnery data', () => {
     const shell = PLACEHOLDER_TANK.mainShell;
     expect(shell.id.toLowerCase()).toContain('test');
     expect(shell.displayName.toLowerCase()).toContain('test');
-    expect(shell.id.toLowerCase()).not.toMatch(/ap|he|apcr|heAT|fg/);
+    // Word-bounded so the ordinary letters inside "test-ballistic" do not trip the pattern.
+    expect(shell.id.toLowerCase()).not.toMatch(/\bap\b|\bhe\b|apcr|\bfg\b/);
+  });
+
+  it('gives the V3 test shell penetration capability and a normalisation value', () => {
+    const shell = PLACEHOLDER_TANK.mainShell;
+    expect(shell.nominalPenetrationMm).toBeGreaterThan(0);
+    // Normalisation is a fraction of the angle penalty cancelled, so it must be a proportion.
+    expect(shell.normalization).toBeGreaterThanOrEqual(0);
+    expect(shell.normalization).toBeLessThanOrEqual(1);
+  });
+
+  it('validates the shipped target tank as well as the player tank', () => {
+    // Two vehicles existing purely as data is the proof that ADR-0003 holds. If the target needed a code
+    // change to be expressible, the data model would not be doing its job.
+    const result = validateVehicleDefinition(TARGET_TANK);
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
+    expect(TARGET_TANK.id).not.toBe(PLACEHOLDER_TANK.id);
   });
 
   it('rejects a definition with a broken gun section', () => {
@@ -210,7 +246,7 @@ describe('V2 gunnery data', () => {
     expect(result.errors.some((e) => e.includes('reloadSeconds'))).toBe(true);
   });
 
-  it('rejects a turret that could rotate through a full turn', () => {
+  it('rejects a turret that could rotate through more than a full turn', () => {
     const broken = {
       ...PLACEHOLDER_TANK,
       turret: { ...PLACEHOLDER_TANK.turret, maxTraverseDeg: 400 },
@@ -218,6 +254,15 @@ describe('V2 gunnery data', () => {
     const result = validateVehicleDefinition(broken);
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes('maxTraverseDeg'))).toBe(true);
+  });
+
+  it('accepts a full 360-degree traverse ring', () => {
+    // The boundary case the V3 owner decision relies on: exactly one full turn is valid.
+    const fullRing = {
+      ...PLACEHOLDER_TANK,
+      turret: { ...PLACEHOLDER_TANK.turret, maxTraverseDeg: 360 },
+    };
+    expect(validateVehicleDefinition(fullRing).valid).toBe(true);
   });
 
   it('rejects sub-stepping coarse enough to let shells tunnel', () => {

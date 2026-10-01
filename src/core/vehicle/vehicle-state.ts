@@ -77,4 +77,19 @@ export interface VehicleTelemetry {
   readonly reloadRemainingSeconds: number;
   /** Shots actually fired, as opposed to shots requested. */
   readonly shotsFired: number;
+
+  // --- V3 damage ------------------------------------------------------------------------
+  /** Remaining vehicle hit points. Zero once destroyed. */
+  readonly hitPoints: number;
+  /** True once the vehicle has been destroyed. */
+  readonly destroyed: boolean;
+  /**
+   * True when a destroyed engine or track module prevents the vehicle driving.
+   *
+   * Reported separately from `destroyed` so the HUD can say *why* a wreck will not move, which is
+   * more useful than a generic "disabled".
+   */
+  readonly immobilised: boolean;
+  /** True when a destroyed gun module prevents the vehicle firing. */
+  readonly gunDisabled: boolean;
 }

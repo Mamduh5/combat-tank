@@ -9,3 +9,4 @@ export * from './input.js';
 export * from './vehicle-definition.js';
 export * from './vehicle-definition-schema.js';
 export * from './placeholder-tank.js';
+export * from './placeholder-target.js';

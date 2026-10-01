@@ -17,4 +17,8 @@ export * from './vehicle/tank.js';
 export * from './ballistics/impact.js';
 export * from './ballistics/shell.js';
 export * from './ballistics/flight-system.js';
+export * from './armor/geometry.js';
+export * from './armor/penetration.js';
+export * from './damage/damage-model.js';
+export * from './combat/combat-resolver.js';
 export * from './sim/world.js';

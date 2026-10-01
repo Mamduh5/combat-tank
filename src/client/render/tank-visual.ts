@@ -1,11 +1,19 @@
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
+import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
 import type { VehicleState } from '../../core/vehicle/vehicle-state.js';
 import { TANK_PROPORTIONS, TANK_COLORS, makeMaterial } from './tank-proportions.js';
+
+/** Wreck tint. Cold and dark, so a destroyed tank reads as inert at a glance. */
+const DESTROYED_TINT = new Color3(0.13, 0.13, 0.15);
+
+/** Faint ember glow, so a wreck is still findable in shadow. */
+const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
 
 /**
  * Placeholder tank, assembled from primitives.
@@ -42,6 +50,8 @@ export class TankVisual {
   private readonly turretNode: TransformNode;
   private readonly barrelNode: TransformNode;
   private readonly barrel: Mesh;
+  /** Cached so the destruction tint is only recomputed when it actually changes. */
+  private destroyed = false;
 
   constructor(scene: Scene, definition: VehicleDefinition) {
     const { lengthM, widthM, heightM } = definition.dimensions;
@@ -152,6 +162,41 @@ export class TankVisual {
     // Elevation is a pitch about the barrel's own pivot. The barrel node already carries the
     // cylinder's lay-flat rotation on the mesh, so only the elevation is applied here.
     this.barrelNode.rotation.x = -turret.elevationRad;
+  }
+
+  /**
+   * Tints the vehicle to show it has been destroyed.
+   *
+   * Deliberately crude — a dark, cold body. The owner asked for the state to be *visibly
+   * distinguishable* and explicitly not for destruction effects, so this is a colour swap rather than
+   * smoke, fire, or a wreck model.
+   *
+   * Only runs on a change, because it walks every material in the vehicle.
+   */
+  setDestroyed(destroyed: boolean): void {
+    if (this.destroyed === destroyed) {
+      return;
+    }
+    this.destroyed = destroyed;
+
+    for (const mesh of this.root.getChildMeshes(false)) {
+      const material = mesh.material;
+      if (material instanceof StandardMaterial) {
+        material.diffuseColor = destroyed ? DESTROYED_TINT : this.baseTintFor(mesh.name);
+        material.emissiveColor = destroyed ? DESTROYED_GLOW : DESTROYED_GLOW.scale(0);
+      }
+    }
+  }
+
+  /** The undamaged colour for a named part, so the tint can be undone. */
+  private baseTintFor(meshName: string): Color3 {
+    if (meshName.includes('turret')) {
+      return TANK_COLORS.turret;
+    }
+    if (meshName.includes('barrel')) {
+      return TANK_COLORS.barrel;
+    }
+    return TANK_COLORS.hull;
   }
 
   /** Enables shadow receiving on every part. */

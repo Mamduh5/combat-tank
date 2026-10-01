@@ -42,10 +42,10 @@ is reloading. See `InputCommand.fire`.
 **Reload** — the interval after firing during which the gun cannot fire again. Owned by the
 simulation core, not the client, so a shot can be refused authoritatively.
 
-**Track** — the running gear. A damaged track can immobilise or slow a vehicle **[later]**.
+**Track** — the running gear. V3 gives each side its own damageable module; a destroyed track is recorded
+as damage state but has **no movement consequence yet**, deliberately deferred rather than faked.
 
-**Module** — a damageable sub-system of a vehicle (track, engine, gun, turret traverse,
-ammunition) **[later, V3]**.
+**Module** — a damageable sub-system of a vehicle (track, engine, gun, ammunition). Present since V3.
 
 **Crew** — named crew members who can be injured, killed, or replaced **[later, speculative]**.
 
@@ -77,22 +77,32 @@ which is the detail most easily got backwards.
 **Muzzle velocity** — the speed of a shell as it leaves the muzzle. Higher velocity means less
 drop over a given distance and generally less time on target.
 
-**Drag** — aerodynamic resistance slowing a shell in flight. **Not modelled in V2** (ADR-0010), so
-long shots fall slightly short of a real shell.
+**Drag** — aerodynamic resistance slowing a shell in flight. **Not modelled** (ADR-0010), so long shots
+fall slightly short of a real shell. The owner confirmed in V3 that this stays omitted for now.
 
-**Penetration** — a shell's ability to defeat armor, expressed as a thickness in millimetres at
-normal incidence.
+**Plate** — one armour surface on a vehicle, defined by nominal thickness, position, size and
+orientation in vehicle-local space. Armour is a set of flat plates rather than a curved hull, so a hit is
+resolved by an exact ray-versus-box test and a designer can read a vehicle's protection off a list.
 
-**Normalization** — the increase in a shell's effective penetration when it strikes armor at an
-angle rather than face-on.
+**Effective thickness** — the thickness a plate *presents* to a shell arriving at an angle. A plate of
+nominal thickness `t` presents `t / cos θ`, where θ is the angle between the shell's path and the plate
+normal. At 0° that is the nominal thickness; at 60° it is double. This is what makes sloping
+interchangeable with adding plate.
 
-**Effective thickness** — `armor thickness × normalization factor (angle)`. This is the value
-compared against a shell's penetration to decide the outcome of an impact.
+**Normalization** — a shell's resistance to angle, as a fraction in `[0, 1]` of the angle penalty it
+cancels. At 0 the shell pays the full geometric penalty; at 1 the angle cancels entirely, so only
+ricochet protects sloped armour. V3 uses a single scalar, not a per-angle curve.
 
-**Impact angle** — the angle between the shell's flight path and the surface normal of the armor it
-strikes. Steep angles reduce effective thickness and can cause a ricochet.
+**Penetration** — a shell's ability to defeat armour. V3 resolves it as a ricochet check, then effective
+thickness compared against normalised shell capability scaled by impact velocity. The outcome is
+**penetrated**, **blocked**, or **ricocheted** — reported explicitly, never as "projectile touched tank".
 
-**Ricochet** — a shell deflecting off a plate instead of penetrating it.
+**Impact angle** — the angle between the shell's flight path and the surface normal of the armour it
+strikes. 0° is a perpendicular hit, 90° a graze. Steep angles raise effective thickness and can cause a
+ricochet.
+
+**Ricochet** — a shell deflecting off a plate instead of penetrating it. In V3 a binary decision at the
+first impact, taken when the angle reaches the vehicle's `ricochetThresholdDeg`.
 
 **Overmatch** — a shell with substantially greater thickness than the plate it strikes punching
 through regardless of angle. **[later, not decided]**

@@ -44,8 +44,12 @@ export function validateVehicleDefinition(
   if (powertrain) {
     requirePositive(powertrain, 'massKg', `${label}.powertrain`, errors);
     requirePositive(powertrain, 'driveForceN', `${label}.powertrain`, errors);
-    requirePositive(powertrain, 'maxSpeedMps', `${label}.powertrain`, errors);
-    requirePositive(powertrain, 'maxReverseSpeedMps', `${label}.powertrain`, errors);
+    // **Non-negative, not positive.** V3 introduces a stationary test target, and a zero top speed is
+    // a legitimate description of a vehicle that does not drive. It was previously rejected because
+    // every vehicle in V1 moved; that is no longer true, and encoding "everything drives" into the
+    // schema would block any future static vehicle or emplacement.
+    requireNonNegative(powertrain, 'maxSpeedMps', `${label}.powertrain`, errors);
+    requireNonNegative(powertrain, 'maxReverseSpeedMps', `${label}.powertrain`, errors);
     requirePositive(powertrain, 'brakeDecelMps2', `${label}.powertrain`, errors);
     requireNonNegative(powertrain, 'coastDecelMps2', `${label}.powertrain`, errors);
   }
@@ -71,9 +75,11 @@ export function validateVehicleDefinition(
     requirePositive(turret, 'traverseDegPerSec', `${label}.turret`, errors);
     requirePositive(turret, 'traverseAccelDegPerSec2', `${label}.turret`, errors);
     requirePositive(turret, 'ringHeightM', `${label}.turret`, errors);
-    // A traverse arc is an angle, so it may legitimately exceed 180, but it must stay below a full
-    // turn: 360 or more would make "the turret's limit" meaningless.
-    requireRange(turret, 'maxTraverseDeg', 0.1, 359, `${label}.turret`, errors);
+    // A traverse arc may be anything up to a full turn. 360 is explicitly allowed: the owner's V3
+    // decision gives the placeholder tank a full ring, and the model still supports restricted arcs for
+    // casemate-style vehicles. What it must never exceed is a full turn, which would make the limit
+    // meaningless.
+    requireRange(turret, 'maxTraverseDeg', 0.1, 360, `${label}.turret`, errors);
   }
 
   const mainGun = requireSection(definition, 'mainGun', errors);
@@ -97,9 +103,45 @@ export function validateVehicleDefinition(
     // The sub-step size bounds how far a shell can pass through terrain undetected. A large value
     // silently reintroduces tunnelling, so it is validated rather than trusted.
     requireRange(mainShell, 'maxSubstepM', 0.05, 50, `${label}.mainShell`, errors);
+    requirePositive(mainShell, 'nominalPenetrationMm', `${label}.mainShell`, errors);
+    requireUnitInterval(mainShell, 'normalization', `${label}.mainShell`, errors);
+  }
+
+  const survivability = requireSection(definition, 'survivability', errors);
+  if (survivability) {
+    requirePositive(survivability, 'hitPoints', `${label}.survivability`, errors);
+    requirePositive(
+      survivability,
+      'damagePerPenetration',
+      `${label}.survivability`,
+      errors,
+    );
+    requireArray(survivability, 'modules', `${label}.survivability`, errors);
+  }
+
+  requireArray(definition, 'armor', `${label}`, errors);
+
+  const penetration = requireSection(definition, 'penetration', errors);
+  if (penetration) {
+    requirePositive(penetration, 'referenceVelocityMps', `${label}.penetration`, errors);
+    // Capped below 90 because the effective-armour formula divides by cos(90) = 0. A ricochet rule
+    // that could never fire would leave that division reachable from real gameplay.
+    requireRange(penetration, 'ricochetThresholdDeg', 1, 90, `${label}.penetration`, errors);
   }
 
   return { valid: errors.length === 0, errors };
+}
+
+/** Requires an array field to be present and actually an array. */
+function requireArray(
+  parent: Record<string, unknown>,
+  key: string,
+  path: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(parent[key])) {
+    errors.push(`${path}.${key}: expected an array`);
+  }
 }
 
 /**

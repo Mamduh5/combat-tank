@@ -209,45 +209,68 @@ human playtest.
 
 ## V3 — Armor, Penetration & Damage
 
-**Goal:** make armor mean something. This is the version that turns a shooting gallery into the
-genre.
+**Status:** Implemented. 253 automated tests pass; subjective readability awaits human playtest.
 
-- **Player-visible result:** the player fires at an enemy tank and the game reports what happened:
-  the shell penetrated a specific plate, or it failed and bounced. Hits reduce hit points; some hits
-  damage a module and visibly change the enemy's behaviour.
+**Goal:** make armor mean something. This is the version that turns a shooting gallery into the genre.
+
+- **Player-visible result:** a stationary target tank sits ahead of the player. Shooting it reports which
+  plate was struck, at what angle, and whether the shell **penetrated**, was **blocked**, or
+  **ricocheted** — with damage, target HP, and any module knocked out shown on a hit-feedback panel. A
+  destroyed target visibly becomes a wreck and can no longer move or fire.
 
 - **Systems introduced**
-  - `src/core/armor` — plate model: named plates with thickness, position, and orientation on hull
-    and turret; impact-point resolution; angle-based **normalization**; **effective thickness**;
-    penetration resolution; ricochet at steep angles.
-  - `src/core/damage` — hit points, damage application, module damage for **track** and **engine**
-    first, and destruction at zero HP.
-  - `src/shared/vehicle-defs` — armour layout as data, plus HP and module definitions.
-  - `src/client/ui` — hit feedback: penetration / no-penetration / ricochet / miss, and an
-    incoming-damage indicator.
-  - `src/client/render` — plate-aware impact effects; a visual cue for a damaged track.
+  - `src/core/armor/geometry.ts` — plates as oriented slabs in vehicle local space; closed-form
+    ray-versus-box hit resolution.
+  - `src/core/armor/penetration.ts` — effective armour, normalisation, ricochet, penetration verdict.
+  - `src/core/damage/damage-model.ts` — hit points, spatial module damage, destruction.
+  - `src/core/combat/combat-resolver.ts` — the V2 impact record → armour → damage path.
+  - `src/shared/placeholder-target.ts` — the stationary test target, as a **separate data file**.
+  - `src/client/render/tank-visual.ts` — turret/barrel nodes and a wreck tint.
+  - `src/client/ui/hud.ts` — the hit-feedback panel.
 
-- **Work areas**
-  - Make the armor model **legible** (principle P6): the player must be able to learn it. The
-    hit-feedback UI is in scope for this version, not an afterthought.
-  - Add dispersion minimally, enough that shots are not pixel-perfect, and record the approach
-    taken (OD-05).
-  - Derive the initial armour numbers from data, not from any real vehicle — Combat Tank is not a
-    simulator.
+- **Owner decisions applied**
+  - **360° turret traverse** for the generic placeholder. The data model still supports a restricted
+    arc, and `TARGET_TANK` uses a 90° casemate-style limit so that capability stays exercised.
+  - **No projectile drag.** ADR-0010 stands, unchanged.
+  - **OD-04 remains open.** One generic test shell, evolved with `nominalPenetrationMm` and
+    `normalization`. No AP/HE/APCR taxonomy.
 
-- **Validation**
-  - Unit tests for armor: a face-on hit at a given thickness and a sloped hit at the same thickness
-    produce **different** outcomes; a steep hit can ricochet; a thin plate at a bad angle can defeat
-    a shell that defeats a thick plate face-on.
-  - Unit tests for damage: damage reduces HP; track damage immobilises; engine damage reduces power;
-    zero HP destroys the vehicle and removes it from the simulation.
-  - A test proves the armour model is **data-driven**: the same suite passes against a different
-    vehicle definition with no code change.
-  - A test proves a non-penetrating hit is a real, reported outcome rather than an error or a fudge.
-  - Manual: the player can predict, before firing, whether a sloped frontal plate will stop a shell.
+- **What differs from the plan above**
+  - Module damage covers **engine, both tracks, gun, and ammunition**, at prototype scope. Engine and
+    vehicle destruction disable movement; gun damage disables firing; ammunition damage is state only,
+    with its explosion deferred. The plan's "removes it from the simulation" was *not* done — keeping
+    the wreck present is needed for V4, and the owner explicitly limited destruction to a state change.
+  - A V2 `makeInput` / schema change: **zero top speed is now valid**, because the test target does not
+    drive. A schema that forbids static vehicles would block any future emplacement.
+  - The plan's `src/shared/vehicle-defs` directory was not created; the existing single
+    `vehicle-definition.ts` was extended, matching V1/V2.
 
-- **Explicitly deferred:** gun, turret-traverse, and ammunition module damage; player-triggered
-  repair; overmatch; spall; crew; fire; destruction of the environment.
+- **Validation** — **253 tests across 12 files**, typecheck, lint and production build all pass.
+  - `tests/core/armor.test.ts` (43) — geometry, effective armour, normalisation, ricochet, region
+    selection, turret mounting.
+  - `tests/core/damage.test.ts` (15) — hit points, spatial module hits, destruction, determinism.
+  - `tests/integration/combat.test.ts` (18) — front/side/rear outcomes, damage only on penetration,
+    module hits through the real layout, and the full path through `Simulation`.
+  - Numeric assertions are **hand-computed**, not snapshots. See the bug below for why that matters.
+
+- **Bugs found and fixed during implementation**
+  - **Plate normal inverted.** Positive pitch pointed the plate normal into the vehicle, mirroring every
+    incidence angle while the plate still looked correct in the data.
+  - **Left/right plate normals swapped** in both vehicle data files.
+  - **Wrong plate scored.** The combat resolver re-cast a ray from the impact point, so it scored shots
+    against the plate *behind* the one struck — a hull-front shot was judged against the turret above it.
+    This produced entirely plausible but wrong numbers, and is the reason ADR-0012 insists on
+    hand-computed test values.
+
+- **Known limitations:** no armour quality or materials; one normal per plate, so compound slopes are
+  several plates; damage does not scale with penetration margin; ricochet is a single binary decision
+  with no multi-bounce; target is stationary by design.
+
+- **Pending human verification:** whether the armour model is understandable from the hit panel, whether
+  the three outcomes are readable at a glance, whether penetrating/blocked/ricocheted feel distinct, and
+  whether the wreck tint reads clearly. Carried forward from earlier versions: movement feel, camera
+  feel, camera obstruction, turret slew feel, gun elevation feel, muzzle/impact readability, aiming HUD
+  readability.
 
 - **Depends on:** V2 (ballistics, impact resolution, vehicle definitions).
 

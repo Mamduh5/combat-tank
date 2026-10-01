@@ -11,26 +11,28 @@ does not attempt to reproduce their content, branding, or exact mechanics.
 
 ## Project status
 
-> **Stage: V2 — Turret, Gun & Ballistics. Implemented (2026-10-01).**
-> The tank now has a turret that traverses independently of the hull, a gun that elevates and
-> depresses within real limits, a reload cycle, and a **real travelling projectile** that arcs, drops,
-> and lands where you aimed. Automated validation passes (172 tests); subjective gunnery feel is
-> still awaiting human playtest.
+> **Stage: V3 — Armor, Penetration & Damage. Implemented (2026-10-01).**
+> A stationary target tank now stands ahead of you. Shooting it reports **which plate** was struck, **at
+> what angle**, and whether the shell **penetrated**, was **blocked**, or **ricocheted** — with damage,
+> target HP, and any module knocked out shown on screen. Where you shoot genuinely matters: the sloped
+> front stops shells, the flank does not, and the thin rear reaches the engine.
 >
-> **V1** (movement and camera) is complete and unchanged. Its subjective feel items — tank movement
-> feel, camera feel, visual camera obstruction behaviour — are recorded as *pending product playtest*
-> and did not block V2.
+> Automated validation passes (253 tests). Subjective readability still awaits human playtest.
 >
-> **V3 has not been started.**
+> **V1** (movement and camera) and **V2** (turret, gun, ballistics) remain complete and unchanged; their
+> subjective feel items are recorded as *pending product playtest*.
+>
+> **V4 has not been started.** The target does not move, aim, or fire — it is a shooting target, not an
+> opponent.
 
-Current capabilities: heavy rate-limited driving and hull traverse, an independent rate-limited turret
-with a traverse arc, a gun with elevation/depression limits and a reload cycle, shells with travel
-time and gravity drop, an impact record for the future armour systems, and a HUD showing gun state,
-reload progress, turret offset and aim range.
+Current capabilities: heavy rate-limited driving and hull traverse; an independent rate-limited turret
+with a full 360° ring; a gun with elevation/depression limits and a reload cycle; shells with travel
+time and gravity drop; a data-driven armour model where **where you hit decides the outcome**;
+deterministic penetration, ricochet and damage; spatially-meaningful module damage; and a hit-feedback
+panel showing the numbers behind every verdict.
 
-There is **no armour, penetration, ricochet, damage, hit points, destruction, enemies, AI, or
-multiplayer** — those are later versions by design. V2 answers *where and how did the shell hit?*;
-V3 will answer *what does that hit do?*
+There is **no armour quality, dispersion, crew, fire, enemies that fight back, AI, or multiplayer** —
+those are later versions by design.
 
 ---
 
@@ -60,6 +62,9 @@ Arrow keys mirror WASD. The camera, hull, and turret are three separate systems:
 drive another, and have the gun trained somewhere else entirely. The mouse aims the **turret**, which
 slews toward the point under the cursor at a limited rate rather than snapping to it — and if you spin
 the hull faster than the turret can traverse, the gun genuinely lags behind.
+
+**To test armour**, drive around the target tank rather than firing at it head-on from the start: it
+faces the same way you do, so its rear is toward you at the beginning.
 
 ### Developer commands
 

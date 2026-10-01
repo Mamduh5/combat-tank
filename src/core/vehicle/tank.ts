@@ -1,4 +1,4 @@
-import type { InputCommand } from '../../shared/input.js';
+import { NEUTRAL_INPUT, type InputCommand } from '../../shared/input.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
 import {
   atan,
@@ -22,6 +22,7 @@ import {
   type MainGunState,
 } from './main-gun.js';
 import { createTurretState, gunDirection, updateTurret, type TurretState } from './turret.js';
+import { createDamageState, isEffectDestroyed, type DamageState } from '../damage/damage-model.js';
 import type { VehicleInit, VehicleState, VehicleTelemetry } from './vehicle-state.js';
 
 export type { VehicleInit, VehicleState, VehicleTelemetry } from './vehicle-state.js';
@@ -38,7 +39,7 @@ export type { TurretState } from './turret.js';
 const PLAY_AREA_TAPER_M = 14;
 
 /**
- * A single tank: hull, and its kinematic locomotion.
+ * A single tank: hull, kinematic locomotion, turret, gun, and damage state.
  *
  * The vehicle owns its own mutable state as plain fields, and `step` is the only thing that
  * changes them. There is no global state anywhere in the core, which is what lets the same class
@@ -49,6 +50,10 @@ const PLAY_AREA_TAPER_M = 14;
  * turned toward the camera or the aim point); the turret is a rate-limited servo on an aim point; the
  * gun elevates within its own limits and fires only when loaded. The vehicle ties them together by
  * stepping them in order each tick, and by refusing to let any one of them shortcut another.
+ *
+ * V3 adds **damage state**, which feeds back into locomotion and firing: a destroyed vehicle can do
+ * neither, and certain destroyed modules impair specific capabilities. That feedback is what makes
+ * the armour model observable rather than a number in a log.
  */
 export class Tank {
   readonly definition: VehicleDefinition;
@@ -73,6 +78,14 @@ export class Tank {
   readonly gunState: MainGunState;
 
   /**
+   * Hit points and module state. Added in V3.
+   *
+   * Held on the vehicle rather than in a separate registry so a vehicle carries everything about
+   * itself, which is what a server will need to serialise and a client will need to render.
+   */
+  readonly damage: DamageState;
+
+  /**
    * A shot requested this tick that the gun accepted, or `null`.
    *
    * Drained by the simulation world each tick. A request is only ever set when the gun was loaded,
@@ -93,6 +106,7 @@ export class Tank {
     this.longitudinal = new LongitudinalModel(definition);
     this.turretState = createTurretState();
     this.gunState = createMainGunState();
+    this.damage = createDamageState(definition);
 
     this.state = {
       position: init.position,
@@ -125,6 +139,10 @@ export class Tank {
       gunLoadState: 'loaded',
       reloadRemainingSeconds: 0,
       shotsFired: 0,
+      hitPoints: this.damage.hitPoints,
+      destroyed: false,
+      immobilised: false,
+      gunDisabled: false,
     };
   }
 
@@ -161,6 +179,14 @@ export class Tank {
     const { traversal, ground, dimensions, powertrain } = this.definition;
     const state = this.state;
 
+    // --- 0. Damage consequences ----------------------------------------------------------
+    // Read before anything else, because a destroyed vehicle must not drive or shoot. The input is
+    // zeroed rather than the steps skipped, so every downstream system still runs and the vehicle
+    // settles onto the ground instead of hanging in the air.
+    const immobilised = this.damage.destroyed || isEffectDestroyed(this.damage, 'engine');
+    const mobilityScale = immobilised ? 0 : 1;
+    const effectiveInput: InputCommand = immobilised ? NEUTRAL_INPUT : input;
+
     // Learn the play area on the first tick. The Terrain instance is supplied per call, so this is
     // re-read only when it could plausibly have changed.
     if (this.playAreaHalfSizeM === Number.POSITIVE_INFINITY) {
@@ -179,7 +205,7 @@ export class Tank {
     state.slopeDeg = slopeDeg;
 
     // --- 2. Longitudinal motion -----------------------------------------------------
-    const solution = this.longitudinal.solve(state.speedMps, input.throttle, slopeDeg);
+    const solution = this.longitudinal.solve(state.speedMps, effectiveInput.throttle, slopeDeg);
 
     // Accelerate toward the solution's target at the solution's rate, then clamp to the
     // definition's absolute forward/reverse limits. A single tick can never overshoot.
@@ -200,9 +226,10 @@ export class Tank {
         ? Math.min(1, Math.abs(state.speedMps) / powertrain.maxSpeedMps)
         : 0;
     const requestedRate =
-      input.turn *
+      effectiveInput.turn *
       traversal.hullTraverseDegPerSec *
-      (1 - traversal.traverseSpeedPenalty * speedFraction);
+      (1 - traversal.traverseSpeedPenalty * speedFraction) *
+      mobilityScale;
 
     state.traverseRateDegPerSec = moveToward(
       state.traverseRateDegPerSec,
@@ -282,7 +309,15 @@ export class Tank {
     // A fire request is a *request*. `tryFire` refuses it while reloading and returns the muzzle
     // position only when the shot actually happens. The world spawns the shell from this; the
     // vehicle does not know or care what happens to it afterwards.
-    const muzzle = input.fire
+    //
+    // A destroyed gun module stops it firing entirely, and a destroyed vehicle cannot fire at all.
+    // Both are prototype consequences of V3 module damage; the underlying damage state is what
+    // matters, and these are the cheapest visible proofs that a specific module was hit.
+    const canFire =
+      !this.damage.destroyed &&
+      !isEffectDestroyed(this.damage, 'gun') &&
+      effectiveInput.fire;
+    const muzzle = canFire
       ? tryFire(this.gunState, this.definition, trunnion, this.turretState, state.headingRad)
       : null;
     this.pendingShot =
@@ -292,8 +327,8 @@ export class Tank {
 
     this.telemetry = {
       speedMps: state.speedMps,
-      requestedThrottle: input.throttle,
-      requestedTurn: input.turn,
+      requestedThrottle: effectiveInput.throttle,
+      requestedTurn: effectiveInput.turn,
       headingRad: state.headingRad,
       traverseRateDegPerSec: state.traverseRateDegPerSec,
       slopeDeg,
@@ -308,6 +343,10 @@ export class Tank {
       gunLoadState: this.gunState.loadState,
       reloadRemainingSeconds: this.gunState.reloadRemainingSeconds,
       shotsFired: this.gunState.shotsFired,
+      hitPoints: this.damage.hitPoints,
+      destroyed: this.damage.destroyed,
+      immobilised,
+      gunDisabled: isEffectDestroyed(this.damage, 'gun'),
     };
   }
 

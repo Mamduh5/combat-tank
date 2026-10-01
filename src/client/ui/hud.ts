@@ -1,5 +1,6 @@
 import { radToDeg, wrapAngle } from '../../core/math/index.js';
 import type { VehicleTelemetry } from '../../core/vehicle/vehicle-state.js';
+import type { CombatResult } from '../../core/combat/combat-resolver.js';
 
 /**
  * Minimal heads-up display.
@@ -24,6 +25,12 @@ export class Hud {
   private readonly gunValue: HTMLElement | null;
   private readonly aimRange: HTMLElement | null;
   private readonly reloadFill: HTMLElement | null;
+  private readonly hitPanel: HTMLElement | null;
+  private readonly hitOutcome: HTMLElement | null;
+  private readonly hitDetail: HTMLElement | null;
+  private readonly hitMath: HTMLElement | null;
+  private readonly hitDamage: HTMLElement | null;
+  private readonly hitModule: HTMLElement | null;
   private readonly status: HTMLElement | null;
   private readonly hint: HTMLElement | null;
 
@@ -45,6 +52,12 @@ export class Hud {
     this.gunValue = root.getElementById('gun-value');
     this.aimRange = root.getElementById('aim-range');
     this.reloadFill = root.getElementById('reload-fill');
+    this.hitPanel = root.getElementById('hit-panel');
+    this.hitOutcome = root.getElementById('hit-outcome');
+    this.hitDetail = root.getElementById('hit-detail');
+    this.hitMath = root.getElementById('hit-math');
+    this.hitDamage = root.getElementById('hit-damage');
+    this.hitModule = root.getElementById('hit-module');
     this.status = root.getElementById('hud-status');
     this.hint = root.getElementById('hud-hint');
   }
@@ -130,6 +143,73 @@ export class Hud {
       setText(this.aimRange, text);
       this.lastRangeText = text;
     }
+  }
+
+  /**
+ * Updates the hit-feedback panel with the outcome of the player's most recent shot.
+ *
+ * The owner asked that the player be able to distinguish penetrated, blocked, and ricocheted **without
+ * inspecting logs**. So the three outcomes get distinct wording *and* distinct colours, and the panel
+ * explains *why* in the terms the armour model actually uses — which plate, at what angle, what effective
+ * thickness, against how much shell capability. That is the panel that makes the model learnable
+ * (vision principle P6), and it doubles as the debugging surface.
+ *
+ * @param result the combat outcome, or `null` for a shot that missed the vehicle entirely
+ * @param targetHp target hit points after the hit, for the damage readout
+ * @param modulesDestroyed modules knocked out by this shot, if any
+ */
+  updateHitFeedback(
+    result: CombatResult | null,
+    targetHp: number,
+    modulesDestroyed: readonly string[] = [],
+  ): void {
+    if (result === null) {
+      setText(this.hitOutcome, 'MISS');
+      this.hitOutcome?.classList.remove('penetrated', 'blocked', 'ricocheted');
+      this.hitPanel?.classList.add('hidden');
+      return;
+    }
+
+    // An armour miss carries no plate and no penetration result, so everything below is guarded on the
+    // kind. A switch rather than a ternary, because narrowing a discriminated union through nested
+    // conditionals is exactly the sort of thing that silently stops type-checking later.
+    let headline: string;
+    if (result.kind === 'penetrated') {
+      headline = `PENETRATED · ${result.plate.definition.region}`;
+    } else if (result.kind === 'ricocheted') {
+      headline = `RICOCHET · ${result.plate.definition.region}`;
+    } else if (result.kind === 'blocked') {
+      headline = `BLOCKED · ${result.plate.definition.region}`;
+    } else {
+      setText(this.hitOutcome, 'MISS');
+      this.hitOutcome?.classList.remove('penetrated', 'blocked', 'ricocheted');
+      this.hitPanel?.classList.add('hidden');
+      return;
+    }
+
+    setText(this.hitOutcome, headline);
+    if (this.hitOutcome !== null) {
+      this.hitOutcome.classList.remove('penetrated', 'blocked', 'ricocheted');
+      this.hitOutcome.classList.add(result.kind);
+    }
+
+    const p = result.penetration;
+    const plate = result.plate.definition;
+
+    // The numbers behind the verdict: exactly what the penetration model compared.
+    setText(this.hitDetail, `${plate.thicknessMm}mm @ ${p.incidenceAngleDeg.toFixed(0)}°`);
+    setText(
+      this.hitMath,
+      `eff ${p.effectiveArmorMm.toFixed(0)}mm vs pen ${p.shellPenetrationMm.toFixed(0)}mm`,
+    );
+    setText(
+      this.hitDamage,
+      result.kind === 'penetrated'
+        ? `-${result.damage.vehicleDamage} HP → ${targetHp} HP`
+        : 'no damage',
+    );
+
+    setText(this.hitModule, `module ${modulesDestroyed.length > 0 ? modulesDestroyed.join(', ') : '—'}`);
   }
 
   /** Sets the status line. `isError` tints it, for startup failures. */

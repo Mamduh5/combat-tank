@@ -46,6 +46,7 @@ Files are named `NNNN-short-slug.md`, numbered sequentially from `0001`, and use
 | [0009](0009-shared-terrain-geometry.md) | Renderer and physics share one terrain mesh; collision uses a trimesh | Accepted | 2026-10-01 | V6 — revisit for authored maps |
 | [0010](0010-analytic-ballistics-without-drag.md) | Shells are point masses under constant gravity, sub-stepped, with no drag | Accepted | 2026-10-01 | V3 — revisit when penetration exists |
 | [0011](0011-turret-is-a-servo-on-an-aim-point.md) | Turret servos toward a world aim point; rate limits live in vehicle data | Accepted | 2026-10-01 | V9 — revisit for client prediction |
+| [0012](0012-closed-form-armour-and-penetration.md) | Armour as oriented slabs; deterministic three-step penetration model | Accepted | 2026-10-01 | V4 — revisit when dispersion arrives |
 
 ADR-0007, ADR-0008 and ADR-0009 were written during **V1 implementation** and record engineering
 decisions made on evidence rather than waiting for owner approval, per the delegation of technical
@@ -64,8 +65,16 @@ implementing it:
   unchanged and its review date stands.
 
 ADR-0010 records the **deliberate absence of aerodynamic drag**. That omission is a decision with a
-stated cost — long shots fall slightly short of a real shell — not an oversight, and V3 should revisit
-it when penetration depends on velocity at impact.
+stated cost — long shots fall slightly short of a real shell — not an oversight, and V3 explicitly
+confirmed it should stay omitted for now.
+
+**ADR-0012 was written during V3** and records the armour representation, the three-step penetration
+model, and the decision to keep penetration deterministic. Its most important content is a **bug that
+testing caught**: the first combat resolver re-cast a ray from the impact point, and so scored shots
+against whichever plate lay *behind* the one actually struck. A sloped hull front was being judged
+against the turret plate rising above it, producing entirely plausible but wrong penetration numbers.
+That is the exact failure mode ADR-0012 exists to prevent, and it is why its tests assert hand-computed
+values rather than snapshots of whatever the code happened to produce.
 
 > **Still undecided and therefore not recorded here:** OD-10 (client prediction vs. pure server
 > authority). That one depends on whether cross-machine determinism proves achievable, which is a V9

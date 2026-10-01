@@ -88,6 +88,20 @@ as data, not as a constant in a system, so changing them is an edit to one file 
 **Status: assumption, not a decision.** Do not cite these numbers as design intent, and do not let a
 later version inherit them as defaults without re-checking them against the player's experience.
 
+## A-10 — V3 armour, penetration and damage values are placeholders
+**Assumed:** plate thicknesses, the ricochet threshold, shell normalisation, vehicle hit points, module
+hit points, and per-penetration damage are engineering defaults that make the systems observable and
+testable.
+**Why:** the owner stated V3 is not final balance, and that a stationary damageable target is acceptable
+and required for validation. There is no armour-quality model and no dispersion yet, so these numbers
+have nothing meaningful to be balanced against.
+**Cost if wrong:** a tuning pass with no code change — every one of these lives in vehicle data.
+**Status: assumption, not a decision.** The armour numbers in `placeholder-tank.ts` and
+`placeholder-target.ts` are **invented**, not statistics for any real vehicle. `docs/vision.md` §6 is
+explicit that Combat Tank is not a simulator. Do not cite them as tank specifications.
+**Explicitly not modelled:** armour quality or materials, dispersion (OD-05), overmatch, spall, crew,
+fire and ammunition detonation.
+
 ## A-09 — Track and engine are the first damageable modules
 **Assumed:** V3 implements those two, with the module system designed to accept more.
 **Why:** they produce the most legible, gameplay-visible failure states ("it cannot move now"), which

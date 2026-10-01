@@ -115,6 +115,62 @@
       }
 
       /* --- Reload progress bar --- */
+      /* --- Hit feedback panel (V3) --- */
+      /* Hidden until a shot resolves, so it never competes with the reticle for attention. */
+      #hit-panel {
+        right: 24px;
+        bottom: 96px;
+        background: var(--hud-bg);
+        border-right: 3px solid var(--hud-accent);
+        padding: 10px 16px 12px;
+        min-width: 240px;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        text-align: right;
+      }
+
+      #hit-panel.hidden {
+        display: none;
+      }
+
+      #hit-panel.penetrated {
+        border-right-color: #6fd06f;
+      }
+
+      #hit-panel.blocked {
+        border-right-color: #d06a5a;
+      }
+
+      #hit-panel.ricocheted {
+        border-right-color: #e8c04a;
+      }
+
+      /* Three outcomes, three colours. Colour is not the only signal — the wording differs too — so the
+         panel stays readable without relying on colour vision. */
+      #hit-outcome {
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+
+      #hit-outcome.penetrated {
+        color: #6fd06f;
+      }
+
+      #hit-outcome.blocked {
+        color: #d06a5a;
+      }
+
+      #hit-outcome.ricocheted {
+        color: #e8c04a;
+      }
+
+      #hit-panel .row {
+        color: var(--hud-dim);
+        font-size: 11px;
+      }
+
       #hud-reload-bar {
         left: 24px;
         bottom: 108px;
@@ -252,6 +308,14 @@
 
     <div class="hud" id="hud-reload-bar">
       <div class="fill" id="reload-fill"></div>
+    </div>
+
+    <div class="hud hidden" id="hit-panel">
+      <div id="hit-outcome">—</div>
+      <div class="row" id="hit-detail">—</div>
+      <div class="row" id="hit-math">—</div>
+      <div class="row" id="hit-damage">—</div>
+      <div class="row" id="hit-module">—</div>
     </div>
 
     <div class="hud" id="hud-aim">

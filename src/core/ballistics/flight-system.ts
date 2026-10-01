@@ -2,7 +2,10 @@ import type { TestShellDefinition } from '../../shared/vehicle-definition.js';
 import { type Vec3, vec3 } from '../../shared/vec3.js';
 import type { Terrain } from '../world/terrain.js';
 import type { ShellImpact } from './impact.js';
-import { createShell, stepShell, type ShellState } from './shell.js';
+
+/** Shared empty obstacle list, so a world with no vehicles allocates nothing per tick. */
+const EMPTY_OBSTACLES: readonly ShellObstacle[] = Object.freeze([]);
+import { createShell, stepShell, type ShellObstacle, type ShellState } from './shell.js';
 
 /**
  * Owns every shell in flight and reports what happened to them.
@@ -46,15 +49,23 @@ export class ShellFlightSystem {
    *
    * Shells that impact or expire are removed. The returned list is in the order the impacts
    * occurred, which is deterministic because the shell list is iterated in spawn order.
+   *
+   * @param obstacles vehicles the shells can strike, supplied by the simulation. The flight system
+   *   does not know what a vehicle is; it only passes the obstacle list through.
    */
-  step(definition: TestShellDefinition, terrain: Terrain, dtSeconds: number): ShellImpact[] {
+  step(
+    definition: TestShellDefinition,
+    terrain: Terrain,
+    dtSeconds: number,
+    obstacles: readonly ShellObstacle[] = EMPTY_OBSTACLES,
+  ): ShellImpact[] {
     const impacts: ShellImpact[] = [];
 
     // Iterated backwards so removing a shell does not disturb the indices of the ones not yet
     // processed. Spawn order is preserved in the impact list regardless.
     for (let i = this.shells.length - 1; i >= 0; i -= 1) {
       const shell = this.shells[i]!;
-      const result = stepShell(shell, definition, terrain, dtSeconds);
+      const result = stepShell(shell, definition, terrain, dtSeconds, obstacles);
 
       if (result.kind === 'impacted') {
         impacts.push(result.impact);
