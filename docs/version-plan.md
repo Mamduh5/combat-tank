@@ -371,6 +371,45 @@ victory logic. V1–V3 systems were reused, not replaced.
 
 ---
 
+## V4 - First Playable Battle (complete)
+
+**Goal:** the first experience that feels like a game rather than a firing range. Two recognizable tanks,
+real shells both ways, one of them destroyed, a clear result, and a restart.
+
+**Delivered:**
+
+- **A fighting opponent.** `EnemyController` produces an `InputCommand` and the enemy is stepped through
+  the same `Tank.step` the player uses. No damage shortcut exists (ADR-0014). States: search, close,
+  engage, reposition. Seeded RNG, so encounters reproduce exactly.
+- **Symmetric combat.** Both vehicles fire, both are shell obstacles, and both resolve through the same
+  penetration and damage model. Hits *on* the player are reported separately from hits *dealt*, because
+  the HUD must never confuse the two.
+- **Encounter lifecycle.** `Battle` owns `ready -> active -> victory | defeat`. Terminal states are
+  sticky, so a shell still in flight cannot reverse a result already shown.
+- **Restart on R**, resetting both vehicles, every module, the opponent's memory, the tick clock, all
+  shells in flight, and the visual effects. Camera re-anchors. Nothing stale survives.
+- **Track damage as gameplay.** One destroyed track halves speed, cuts steering authority and pulls the
+  vehicle toward the damaged side; both destroyed immobilises it. Derived purely from module state, so it
+  is exactly reversible on restart.
+- **A combat arena.** Authored mounds, a central ridge and two cuttings over a flatter base surface, with
+  a documented slope ratio that keeps cover drivable.
+- **Prototype tank models.** Two distinguishable variants built in code: sloped glacis, faceted turret
+  with bustle, track links, return rollers, sprocket and idler, fenders, mantlet and muzzle brake
+  (ADR-0015). The opponent differs in *silhouette*, not only colour.
+- **Feedback.** Incoming-hit banner on the opposite side of the screen from the outgoing one, player
+  condition panel with module status, victory/defeat screen with stats, camera shake on a penetration
+  that hurts, and synthesised prototype audio (gun, impact, ricochet, destruction, two engine loops).
+
+**Verified:** 308 tests across 16 files, typecheck and lint clean, production build clean.
+
+**Deliberately not done:** penetration-margin damage scaling (deferred, per the brief), a real
+ammunition roster (OD-04), multiple enemies, pathfinding, spotting, authored maps, progression.
+
+**Open questions for the owner:** OD-11 (a stationary player is nearly invulnerable - a genuine balance
+decision) and OD-08 (no AI framework, by design).
+
+---
+
 ## V5 — Autonomous AI Opponents
 
 **Goal:** make the game genuinely playable and testable alone, with bots that behave believably

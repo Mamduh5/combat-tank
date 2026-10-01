@@ -178,7 +178,12 @@ export function stepShell(
     // --- Vehicle test -------------------------------------------------------------------
     // Tested *before* the ground, because a shell that reaches a vehicle before the terrain should
     // hit the vehicle. Segment-based, so a fast shell cannot pass through one.
-    const obstacleHit = firstObstacleHit(obstacles, shell.position, next);
+    //
+    // `shooterId` is passed through so the gun that fired the shell cannot shoot its own vehicle.
+    // Before V4 there was only one shooter and it was never an obstacle to itself, so this was
+    // implicit; with two vehicles exchanging fire it has to be explicit, because the obstacle list
+    // now contains the shooter's own hull and a shell spawned at the muzzle is inside it.
+    const obstacleHit = firstObstacleHit(obstacles, shell.position, next, shell.shooterId);
     if (obstacleHit !== null) {
       const impactVelocity = vec3(velocity.x, velocity.y, velocity.z);
       const incomingDirection = unitOr(impactVelocity, vec3(0, 0, 1));
@@ -251,11 +256,18 @@ function firstObstacleHit(
   obstacles: readonly ShellObstacle[],
   from: Vec3,
   to: Vec3,
+  shooterId: string | null,
 ): ObstacleHit | null {
   let best: ObstacleHit | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const obstacle of obstacles) {
+    // A shell never strikes the vehicle that launched it. Skipping by id rather than by list
+    // position keeps the rule with the collision test that enforces it.
+    if (shooterId !== null && obstacle.vehicleId === shooterId) {
+      continue;
+    }
+
     const hit = obstacle.hitSegment(from, to);
     if (hit === null) {
       continue;

@@ -289,3 +289,62 @@ agent assumes an omission was an oversight.
 - Sound-based detection as a spotting mechanic.
 - Any form of ranked play, seasons, or skill matchmaking.
 - Specific historical vehicle likenesses or real-world names.
+
+---
+
+## OD-11: A player who never moves is nearly invulnerable
+
+- **Status:** Open - needs owner input
+- **Raised:** V4
+
+### The question
+
+During V4 measurement, a player who sat still and kept their hull squared up to the opponent **could
+not be hurt at all**. Over 40 seconds of simulated combat the opponent fired five shells; all five hit
+the player's frontal plate, all five were stopped or deflected, and the player finished on 1000 of 1000
+hit points.
+
+The cause is not a bug. The player's front plate is 200 mm thick and pitched 60 degrees, which gives it
+an effective thickness against a head-on shot of roughly 400 mm, against a shell that penetrates 150 mm.
+The armour model is working exactly as V3 designed it.
+
+### Why it is a decision rather than a defect
+
+The same property made the V3 target interesting: shoot the flank or the rear. It is a good property in
+principle. The open question is whether it is too strong when the thing on the other side of the gun is
+a live opponent that will not let you keep presenting that plate.
+
+Three ways this could go, none of them obviously right:
+
+1. **Leave it.** Parking head-on is a legitimate and rewarded tactic, and the fight rewards movement.
+   Risk: a new player who does not understand the game can be effectively invulnerable and conclude it
+   is broken.
+2. **Soften the player's frontal plate** (thinner, or pitched less steeply) so a head-on shot can
+   occasionally get through. Makes the opening exchange faster and less positional.
+3. **Make the opponent actively hunt the flank** rather than circling at a fixed offset. This is a real
+   AI capability and belongs with the V5+ work, not with a balance tweak.
+
+### What V4 did
+
+Option 1, deliberately, and it is now asserted by a test so it cannot change silently. The opponent
+steers to a preferred bearing 58 degrees off the direct line, so it presents its flank and opens the
+player's. A player who manoeuvres is reliably hit; a player who parks is not.
+
+The owner should decide whether that is the intended difficulty curve before V5 builds on it.
+
+---
+
+## OD-08: The opponent has no real AI framework (V4 position)
+
+- **Status:** Open - intentionally deferred
+- **Raised:** V4
+
+V4's opponent is a single state machine with four behaviours, driven through the shared `InputCommand`
+interface (ADR-0014). It cannot plan, path, score cover, flank intelligently, or remember anything
+about the fight beyond the player's last known position. That was a deliberate scope boundary: a general
+AI framework built now would be aimed at a version that has not specified what it needs, and would be
+hard to remove later.
+
+The specific capability V4 measures as missing is **choosing an angle deliberately**. It holds one
+preferred bearing and circles; it does not decide that the player's rear is exposed and go there. See
+OD-11, which is partly an AI problem wearing a balance costume.

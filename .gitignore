@@ -29,3 +29,8 @@ logs/
 # Visual-review artifacts (tools/shot.mjs output and the headless browser profile)
 shots/
 .chrome-profile/
+
+# Local dev-server and verification logs. These are written by vite preview and by
+# the ad-hoc verification runs; none of them are project artefacts.
+preview.log
+*.log

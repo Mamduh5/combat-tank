@@ -92,4 +92,15 @@ export interface VehicleTelemetry {
   readonly immobilised: boolean;
   /** True when a destroyed gun module prevents the vehicle firing. */
   readonly gunDisabled: boolean;
+
+  // --- V4 track condition -------------------------------------------------------------------
+  /**
+   * How many of the vehicle's two tracks are destroyed, in `[0, 2]`.
+   *
+   * Reported rather than inferred from `immobilised`, because the two mean different things: `0` and
+   * `1` both still drive, but `1` drags and veers. The HUD needs that distinction to warn the player
+   * that their mobility is compromised, and the opponent's controller uses it to decide that a
+   * damaged player is worth pressing rather than avoiding.
+   */
+  readonly tracksDestroyed: number;
 }

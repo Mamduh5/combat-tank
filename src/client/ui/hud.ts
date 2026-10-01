@@ -50,6 +50,24 @@ export class Hud {
   private readonly targetRange: HTMLElement | null;
   /** First-launch briefing, dismissed once the player starts playing. */
   private readonly briefing: HTMLElement | null;
+  /** Incoming-hit banner: the player's own armour taking a hit. */
+  private readonly incomingBanner: HTMLElement | null;
+  private readonly incomingVerdict: HTMLElement | null;
+  private readonly incomingSub: HTMLElement | null;
+  /** End-of-battle overlay. */
+  private readonly outcome: HTMLElement | null;
+  private readonly outcomeTitle: HTMLElement | null;
+  private readonly outcomeStats: HTMLElement | null;
+  /** Persistent "press R to restart" prompt. */
+  private readonly restartHint: HTMLElement | null;
+  /** Player condition panel: own hit points and destroyed modules. */
+  private readonly playerPanel: HTMLElement | null;
+  private readonly playerHp: HTMLElement | null;
+  private readonly playerHpFill: HTMLElement | null;
+  private readonly playerStatus: HTMLElement | null;
+
+  /** Remaining display time for the incoming-hit banner, seconds. */
+  private incomingTimer = 0;
 
   /**
    * Seconds the outcome banner stays on screen, counted down by `tick`.
@@ -106,6 +124,21 @@ export class Hud {
     this.targetHpFill = root.getElementById('target-hp-fill');
     this.targetRange = root.getElementById('target-range');
     this.briefing = root.getElementById('hud-briefing');
+
+    this.incomingBanner = root.getElementById('incoming-banner');
+    this.incomingVerdict = root.getElementById('incoming-verdict');
+    this.incomingSub = root.getElementById('incoming-sub');
+
+    this.outcome = root.getElementById('hud-outcome');
+    this.outcomeTitle = root.getElementById('outcome-title');
+    this.outcomeStats = root.getElementById('outcome-stats');
+
+    this.restartHint = root.getElementById('restart-hint');
+
+    this.playerPanel = root.getElementById('hud-player');
+    this.playerHp = root.getElementById('player-hp');
+    this.playerHpFill = root.getElementById('player-hp-fill');
+    this.playerStatus = root.getElementById('player-status');
   }
 
   /**
@@ -116,6 +149,15 @@ export class Hud {
    * this frame.
    */
   tick(dtSeconds: number): void {
+    // The incoming banner ages independently of the outgoing one: an incoming hit is worth showing for
+    // longer, because the player has to notice it before it becomes a destroyed tank.
+    if (this.incomingTimer > 0) {
+      this.incomingTimer -= dtSeconds;
+      if (this.incomingTimer <= 0) {
+        this.incomingBanner?.classList.remove('show');
+      }
+    }
+
     if (this.bannerTimer <= 0) {
       return;
     }
@@ -345,6 +387,119 @@ export class Hud {
     }
   }
 
+  /**
+   * Shows that the *player* has been hit, as distinct from a shot they took.
+   *
+   * Separate from `showCombatBanner` and positioned on the **opposite side** of the screen. The player
+   * reads the two differently: an outgoing result is information ("did my shot work?"), an incoming one
+   * is a warning ("I am being hurt"). Putting them in the same place and style would mean the player
+   * has to read the text to tell which one happened — exactly the confusion V4 has to remove, because
+   * both sides now fire.
+   *
+   * Red and held for longer than an outgoing banner: an incoming hit that flashes for a moment is easy
+   * to miss, and missing it means missing the information that the player is about to die.
+   */
+  showIncomingHit(verdict: string, kind: string, sub: string): void {
+    setText(this.incomingVerdict, verdict);
+    if (this.incomingVerdict !== null) {
+      this.incomingVerdict.className = `verdict incoming ${kind}`;
+    }
+    setText(this.incomingSub, sub);
+    this.incomingBanner?.classList.add('show');
+    this.incomingTimer = INCOMING_HOLD_SECONDS;
+  }
+
+  /**
+   * Updates the player's own condition: hit points, and what has been knocked out.
+   *
+   * Added in V4 because the player is now destructible. The own-vehicle panel is the player's most
+   * important readout — more important than speed — and it is placed bottom-left opposite the enemy
+   * panel so the two conditions can be compared at a glance without the eyes travelling.
+   *
+   * Module damage is summarised rather than itemised: a player who has lost a track needs to know their
+   * mobility is impaired, not to read the internal id of the module.
+   */
+  updatePlayerStatus(status: {
+    hp: number;
+    maxHp: number;
+    destroyed: boolean;
+    immobilised: boolean;
+    tracksDestroyed: number;
+    gunDisabled: boolean;
+  } | null): void {
+    if (status === null) {
+      this.playerPanel?.classList.add('hidden');
+      return;
+    }
+
+    this.playerPanel?.classList.remove('hidden');
+    this.playerPanel?.classList.toggle('critical', status.destroyed);
+    setText(this.playerHp, status.hp.toString());
+
+    const fraction = status.maxHp > 0 ? status.hp / status.maxHp : 0;
+    if (this.playerHpFill !== null) {
+      this.playerHpFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+      this.playerHpFill.classList.toggle('hurt', fraction <= 0.5 && fraction > 0.25);
+      this.playerHpFill.classList.toggle('critical', fraction <= 0.25);
+    }
+
+    // Worst status first: a destroyed vehicle is more urgent to report than a damaged track.
+    const notes: string[] = [];
+    if (status.destroyed) {
+      notes.push('DESTROYED');
+    } else {
+      if (status.immobilised) {
+        notes.push('IMMOBILISED');
+      }
+      if (status.gunDisabled) {
+        notes.push('GUN DISABLED');
+      }
+      if (status.tracksDestroyed === 1) {
+        notes.push('TRACK DRAGGING');
+      } else if (status.tracksDestroyed >= 2) {
+        notes.push('TRACKS DESTROYED');
+      }
+    }
+    setText(this.playerStatus, notes.length > 0 ? notes.join(' \u00b7 ') : 'ALL SYSTEMS OK');
+    this.playerStatus?.classList.toggle('warn', notes.length > 0);
+    this.playerStatus?.classList.toggle('bad', status.destroyed || status.immobilised);
+  }
+
+  /**
+   * Shows the end-of-battle screen.
+   *
+   * Carries a short stat line rather than just a verdict, because the first thing a player wants to know
+   * after a fight is how it went: shots fired, shots taken, and what each side had left. It turns "I lost"
+   * into information the player can act on, which is the difference between a loss and a mystery.
+   */
+  showBattleOutcome(
+    won: boolean,
+    playerShots: number,
+    opponentShots: number,
+    playerHp: number,
+    opponentHp: number,
+  ): void {
+    setText(this.outcomeTitle, won ? 'ENEMY DESTROYED' : 'DESTROYED');
+    this.outcomeTitle?.classList.toggle('won', won);
+    this.outcomeTitle?.classList.toggle('lost', !won);
+    setText(
+      this.outcomeStats,
+      `Your shots: ${playerShots}   \u00b7   Its shots: ${opponentShots}\n` +
+        `Your hull: ${Math.max(0, playerHp)} HP   \u00b7   Enemy: ${Math.max(0, opponentHp)} HP`,
+    );
+    this.outcome?.classList.add('show');
+  }
+
+  /** Hides the end-of-battle screen, for a restart. */
+  hideBattleOutcome(): void {
+    this.outcome?.classList.remove('show');
+  }
+
+  /** Shows or hides the "press R to restart" prompt. */
+  showRestartHint(visible: boolean): void {
+    this.restartHint?.classList.toggle('show', visible);
+  }
+
   /** Dismisses the first-launch briefing. Called once the player has clearly started playing. */
   hideBriefing(): void {
     this.briefing?.classList.add('hidden');
@@ -378,6 +533,15 @@ export function showHint(hud: Hud): void {
  * player lines up the next shot.
  */
 const BANNER_HOLD_SECONDS = 2.4;
+
+/**
+ * How long the incoming-hit banner stays up, seconds.
+ *
+ * Longer than an outgoing result. The player has to act on an incoming hit — move, turn, use cover — so
+ * it needs to be readable while they are doing that, whereas an outgoing result is information they can
+ * absorb at leisure.
+ */
+const INCOMING_HOLD_SECONDS = 3.2;
 
 /** Derives a gear-style label from current speed and throttle, for a quick read of intent. */
 function gearLabel(telemetry: VehicleTelemetry): string {

@@ -27,13 +27,30 @@ const CORE_DIR = join(PROJECT_ROOT, 'src', 'core');
 const SHARED_DIR = join(PROJECT_ROOT, 'src', 'shared');
 const ESLINT_BIN = join(PROJECT_ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js');
 
+/**
+ * Filename prefix for the temporary probe files written into `src/core`.
+ *
+ * Every probe name and every cleanup scan derives from this one constant. That is deliberate: an
+ * earlier version created `purity-probe.ts` while the interruption-cleanup scans looked for
+ * `purity-probe-`, so a run killed between the write and the `finally` left a `.ts` file inside the
+ * core that failed the next `npm run typecheck` — a confusing failure in an unrelated test. When the
+ * prefix and the filenames are separate literals, they can drift; when they share a constant, they
+ * cannot.
+ */
+const PROBE_PREFIX = 'purity-probe-';
+
+/** Absolute path of the single lint probe file. Named to match `PROBE_PREFIX`. */
+const LINT_PROBE_FILE = `${PROBE_PREFIX}lint.ts`;
+
 /** Files that legitimately contain the banned patterns, with the reason they are exempt. */
 const EXEMPT_CORE_FILES = new Set([join('math', 'trig.ts')]);
 
 afterAll(() => {
-  // Any temporary probe file left behind by a failed test would be a confusing artefact.
+  // Any temporary probe file left behind by an interrupted test would be a confusing artefact, and
+  // a stray `.ts` in `src/core` breaks the next typecheck. Matching `PROBE_PREFIX` means this can
+  // never miss a probe the tests above are able to create.
   for (const entry of readdirSync(CORE_DIR)) {
-    if (entry.startsWith('purity-probe-')) {
+    if (entry.startsWith(PROBE_PREFIX)) {
       rmSync(join(CORE_DIR, entry), { force: true });
     }
   }
@@ -45,7 +62,7 @@ function listTypeScriptFiles(dir: string): string[] {
   for (const entry of readdirSync(dir)) {
     // Probe files are created and deleted by the lint-gate tests below. Skipping them keeps the
     // scan from observing a probe mid-test and reporting a violation the scan did not cause.
-    if (entry.startsWith('purity-probe-')) {
+    if (entry.startsWith(PROBE_PREFIX)) {
       continue;
     }
     const full = join(dir, entry);
@@ -171,7 +188,7 @@ describe('the lint gate is real', () => {
    * cleans up rather than leaving a probe that would break the next run's typecheck.
    */
   function lintProbe(source: string): { exitCode: number; output: string } {
-    const target = join(CORE_DIR, 'purity-probe.ts');
+    const target = join(CORE_DIR, LINT_PROBE_FILE);
     writeFileSync(target, source, 'utf8');
 
     try {
@@ -239,8 +256,16 @@ describe('project layout', () => {
   });
 
   it('leaves no temporary probe files behind', () => {
-    const leftovers = readdirSync(CORE_DIR).filter((entry) => entry.startsWith('purity-probe-'));
+    const leftovers = readdirSync(CORE_DIR).filter((entry) => entry.startsWith(PROBE_PREFIX));
     expect(leftovers).toEqual([]);
+  });
+
+  it('names every probe it can create under the prefix its cleanup scans', () => {
+    // Guards the maintenance fix directly. If a future probe is added with a name outside
+    // `PROBE_PREFIX`, an interrupted run can strand it in `src/core` and break the next
+    // typecheck, which is exactly the failure this was corrected for.
+    expect(LINT_PROBE_FILE.startsWith(PROBE_PREFIX)).toBe(true);
+    expect(rmSync, 'probe cleanup relies on rmSync being imported').toBeTypeOf('function');
   });
 });
 

@@ -125,6 +125,96 @@ export const TANK_COLORS = {
  */
 export const TARGET_ACCENT = new Color3(0.52, 0.3, 0.22);
 
+/**
+ * A colour set that a tank model can be painted from.
+ *
+ * Named by *part* rather than by colour, so the opponent can use a different palette without the
+ * builder knowing anything about values, and so a future vehicle can supply its own without touching
+ * this file.
+ */
+export interface TankPalette {
+  readonly hull: Color3;
+  readonly track: Color3;
+  readonly turret: Color3;
+  readonly barrel: Color3;
+  readonly wheel: Color3;
+  readonly fender: Color3;
+}
+
+/**
+ * The opponent's palette: a weathered, lighter-value scheme.
+ *
+ * Chosen to differ from the player's olive in **value** as well as hue, not merely in hue. A
+ * lighter grey-tan opponent against a darker green player keeps both readable against the terrain's
+ * mid-greens and against each other, and survives the fog the arena uses for depth.
+ */
+export const OPPONENT_COLORS: TankPalette = {
+  hull: new Color3(0.46, 0.42, 0.36),
+  track: new Color3(0.24, 0.22, 0.2),
+  turret: new Color3(0.5, 0.46, 0.39),
+  barrel: new Color3(0.3, 0.28, 0.24),
+  wheel: new Color3(0.33, 0.3, 0.27),
+  fender: new Color3(0.44, 0.4, 0.34),
+};
+
+/**
+ * Detail parts that make a primitive tank read as a machine.
+ *
+ * Every value here is a **visual** choice with no gameplay meaning, grouped so they can be tuned as a
+ * set while iterating on how the vehicle reads at range.
+ */
+export const TANK_DETAIL = {
+  /**
+   * Number of raised track links along the outer face of each track unit.
+   *
+   * The most effective single addition to the running gear. V3R had visible road wheels, but the track
+   * itself was a smooth dark slab, which at range reads as a skirt rather than as a track. A repeated
+   * link pattern along the outer face is what makes the eye read "tracked".
+   *
+   * 14 per side establishes the rhythm without the count becoming visible as banding.
+   */
+  trackLinkCount: 14,
+  /** Link height as a fraction of track height. Low and wide, so the pattern reads at a glancing angle. */
+  trackLinkHeightFraction: 0.3,
+  /** Link protrusion from the track face, metres. A silhouette cue, not a texture. */
+  trackLinkDepthM: 0.06,
+
+  /**
+   * Return rollers above the road wheels along each track.
+   *
+   * The second feature that reads as running gear rather than as a row of wheels.
+   */
+  returnRollerCount: 3,
+  /** Return roller radius as a fraction of track height. */
+  returnRollerRadiusFraction: 0.17,
+
+  /**
+   * Drive sprocket and idler radius as a fraction of track height.
+   *
+   * Larger than the road wheels and set at the two ends of the track, which gives each track unit a
+   * definite front and back — the reason a tank's orientation is readable from its running gear alone.
+   */
+  sprocketRadiusFraction: 0.38,
+
+  /** Fender thickness as a fraction of hull height. */
+  fenderThicknessFraction: 0.05,
+  /** Fender overhang beyond the track's outer face, as a fraction of hull width. */
+  fenderOverhangFraction: 0.06,
+
+  /** Mantlet radius as a multiple of the barrel radius. The collar where barrel meets turret. */
+  mantletRadiusScale: 2.6,
+  /** Mantlet length as a fraction of the barrel length. */
+  mantletLengthFraction: 0.12,
+
+  /** Muzzle brake radius as a multiple of the barrel radius. The swollen tip that ends the gun. */
+  muzzleBrakeRadiusScale: 1.5,
+  /** Muzzle brake length as a fraction of the barrel length. */
+  muzzleBrakeLengthFraction: 0.09,
+
+  /** Turret ring collar radius as a fraction of hull width. Sits between hull and turret. */
+  turretRingRadiusFraction: 0.17,
+} as const;
+
 /** Creates a matte material. Specular highlights on untextured primitives look like plastic. */
 export function makeMaterial(scene: Scene, name: string, color: Color3): StandardMaterial {
   const material = new StandardMaterial(name, scene);

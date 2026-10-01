@@ -22,8 +22,15 @@ import type { PhysicsWorld } from '../physics/rapier-terrain.js';
  * without hunting through the maths.
  */
 export const CAMERA_TUNING = {
-  /** Default distance behind the vehicle, metres. */
-  defaultDistanceM: 17,
+  /**
+   * Default distance behind the vehicle, metres.
+   *
+   * Raised from 17 in V4, after a screenshot showed the player's tank filling the lower third of the
+   * screen at the V3R distance. A duel needs **both** tanks comfortably in frame at once: at 17 m the
+   * player's own hull dominated the view and the opponent was a speck near the horizon, which is the
+   * opposite of what the player needs when deciding whether to advance or hold.
+   */
+  defaultDistanceM: 22,
   /** Closest the camera may be pulled in by obstruction, metres. */
   minDistanceM: 4.5,
   /** Furthest the player may zoom out, metres. */
@@ -35,14 +42,16 @@ export const CAMERA_TUNING = {
    * level with the tracks, so the vehicle read as a slab and its own hull occluded the ground the
    * player was aiming at.
    */
-  targetHeightM: 3.1,
+  targetHeightM: 2.8,
   /**
    * Initial downward tilt, radians. Positive looks down.
    *
-   * Raised from 0.32 to 0.42 so the default view looks over the vehicle and shows the ground the player
-   * is aiming at, instead of staring at the tank's rear deck with the horizon above it.
+   * Raised from 0.32 to 0.42 in V3R to show the ground ahead. V4 lowered it again to 0.34, for the
+   * opposite reason to the one that raised it: with a moving opponent in the frame, too much downward
+   * tilt puts the horizon off the top of the screen and leaves the player judging range against bare
+   * ground. At 0.34 both the tank and the horizon where the enemy is sit comfortably in frame.
    */
-  initialPitchRad: 0.42,
+  initialPitchRad: 0.34,
   /** Vertical look limits, radians. Prevents flipping over the top. */
   minPitchRad: -0.2,
   maxPitchRad: 1.25,
@@ -144,8 +153,54 @@ export class OrbitCamera {
     }
 
     this.currentDistanceM = this.resolveObstruction(dtSeconds);
+    this.ageShake(dtSeconds);
     this.applyTransform();
   }
+
+  /**
+   * Advances the shake decay, clearing it once it has elapsed.
+   *
+   * The amplitude follows the *square* of the remaining fraction rather than the fraction itself. A
+   * linear decay is perceptible as a single jolt followed by a slow drift; squaring it spends most of the
+   * effect in the first third, which reads as an impact rather than as the camera being knocked.
+   */
+  private ageShake(dtSeconds: number): void {
+    if (this.shakeRemainingSeconds <= 0) {
+      this.shakeMagnitudeM = 0;
+      return;
+    }
+    this.shakeRemainingSeconds = Math.max(0, this.shakeRemainingSeconds - dtSeconds);
+    const fraction = this.shakeTotalSeconds > 0 ? this.shakeRemainingSeconds / this.shakeTotalSeconds : 0;
+    this.shakeMagnitudeM *= fraction * fraction;
+    if (this.shakeRemainingSeconds <= 0) {
+      this.shakeMagnitudeM = 0;
+      this.shakeTotalSeconds = 1;
+    }
+  }
+
+  /**
+   * The current positional shake offset, metres.
+   *
+   * Uses `Math.random` freely: this is **client presentation**, not simulation state, so it is outside
+   * the determinism rules the core obeys (ADR-0005) and is not part of anything a test can assert.
+   */
+  private shakeOffset(): { x: number; y: number; z: number } {
+    if (this.shakeMagnitudeM <= 0) {
+      return { x: 0, y: 0, z: 0 };
+    }
+    return {
+      x: (Math.random() * 2 - 1) * this.shakeMagnitudeM,
+      y: (Math.random() * 2 - 1) * this.shakeMagnitudeM * 0.7,
+      z: (Math.random() * 2 - 1) * this.shakeMagnitudeM,
+    };
+  }
+
+  /** Remaining shake time, seconds. Zero when not shaking. */
+  private shakeRemainingSeconds = 0;
+  /** Total shake duration, used to compute the decay curve. */
+  private shakeTotalSeconds = 1;
+  /** Peak shake displacement, metres. */
+  private shakeMagnitudeM = 0;
 
   /**
    * Reduces the orbit distance so terrain does not come between the camera and the vehicle.
@@ -214,15 +269,52 @@ export class OrbitCamera {
 
   private applyTransform(): void {
     const offset = this.orbitOffset(this.currentDistanceM);
+    const shake = this.shakeOffset();
     this.camera.position.set(
-      this.smoothedTarget.x + offset.x,
-      this.smoothedTarget.y + offset.y,
-      this.smoothedTarget.z + offset.z,
+      this.smoothedTarget.x + offset.x + shake.x,
+      this.smoothedTarget.y + offset.y + shake.y,
+      this.smoothedTarget.z + offset.z + shake.z,
     );
+    // The aim target is deliberately **not** shaken: shaking where the camera looks would make the
+    // reticle jump, and the player is often lining up a shot while under fire. Only the camera body
+    // moves, so the hit is felt without the aim being disturbed.
     this.camera.setTarget(this.smoothedTarget);
   }
 
-  /** Snaps the orbit behind the vehicle, bound to a recentre key. */
+  /**
+   * Snaps the camera back to its default framing of the vehicle.
+   *
+   * Added in V4 for restart. Without it, restarting after a fight leaves the camera wherever the last
+   * battle ended: possibly zoomed in on a rock, or looking at the sky, or at a completely different
+   * distance. The simulation resets but the *view* does not, and the encounter appears to start from an
+   * arbitrary angle — which reads as a broken restart rather than as a reset.
+   *
+   * The orbit angles themselves are restored to the default, not just the distance.
+   */
+  snapToTarget(): void {
+    this.yawRad = 0;
+    this.pitchRad = CAMERA_TUNING.initialPitchRad;
+    this.distanceM = CAMERA_TUNING.defaultDistanceM;
+    this.currentDistanceM = CAMERA_TUNING.defaultDistanceM;
+    this.applyTransform();
+  }
+
+  /**
+   * Adds a short, decaying positional shake, for taking a hit.
+   *
+   * Deliberately **displacement, not rotation**: a rotational shake fights the camera's own controls
+   * and makes aiming during the effect unpleasant, whereas a brief positional jolt is felt without
+   * being in the way. The player is often under fire *and* trying to line up a shot, so anything that
+   * degrades aiming during a hit is the wrong choice.
+   *
+   * Randomised per axis with a decay, which reads as an impact rather than as a wobble.
+   */
+  shake(durationSeconds: number, magnitudeM: number): void {
+    this.shakeRemainingSeconds = Math.max(this.shakeRemainingSeconds, durationSeconds);
+    this.shakeTotalSeconds = Math.max(this.shakeTotalSeconds, durationSeconds);
+    this.shakeMagnitudeM = Math.max(this.shakeMagnitudeM, magnitudeM);
+  }
+
   recentreBehind(headingRad: number): void {
     this.yawRad = headingRad;
   }

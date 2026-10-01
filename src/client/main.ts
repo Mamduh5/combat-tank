@@ -1,15 +1,17 @@
 import { Engine } from '@babylonjs/core/Engines/engine.js';
 import { Simulation } from '../core/sim/world.js';
+import { Battle } from '../core/battle/battle.js';
+import type { CombatResult } from '../core/combat/combat-resolver.js';
 import { reloadProgress } from '../core/vehicle/main-gun.js';
 import { PLACEHOLDER_TANK } from '../shared/placeholder-tank.js';
-import { TARGET_TANK } from '../shared/placeholder-target.js';
+import { ENEMY_TANK } from '../shared/enemy-tank.js';
 import type { Vec3 } from '../shared/vec3.js';
-import { makeInput } from '../shared/input.js';
+import { makeInput, type InputCommand } from '../shared/input.js';
 import { OrbitCamera } from './camera/orbit-camera.js';
 import { InputManager } from './input/input-manager.js';
 import { PhysicsWorld } from './physics/rapier-terrain.js';
 import { createScene } from './render/scene.js';
-import { TARGET_ACCENT } from './render/tank-proportions.js';
+import { CombatAudio } from './audio/combat-audio.js';
 import { ShellEffects } from './render/shell-effects.js';
 import { TankVisual } from './render/tank-visual.js';
 import { Hud } from './ui/hud.js';
@@ -41,6 +43,17 @@ import { Hud } from './ui/hud.js';
  */
 const MAX_FRAME_DELTA_SECONDS = 0.25;
 
+/** Fixed battle timestep in seconds. Matches the core's 60 Hz tick; not read from it, to keep the
+ *  client from reaching into core internals for a number it already knows. */
+const BATTLE_TICK_DT = 1 / 60;
+
+/** Cap on catch-up ticks per frame, matching the core's own cap so the two cannot disagree. */
+const MAX_BATTLE_CATCHUP_TICKS = 5;
+
+/** Screen-shake duration and magnitude when the player is penetrated, seconds and metres. */
+const HIT_SHAKE_SECONDS = 0.28;
+const HIT_SHAKE_MAGNITUDE = 0.32;
+
 /** Hide the control hint once the player has driven far enough to have clearly understood it. */
 const HINT_HIDE_DISTANCE_M = 25;
 
@@ -58,10 +71,15 @@ async function bootstrap(): Promise<void> {
   // --- Simulation (headless core) ----------------------------------------------------
   const simulation = new Simulation({
     vehicle: PLACEHOLDER_TANK,
-    // The stationary test target. It does not move, aim, or fire — it exists so armour, penetration
-    // and damage can be tested by hand. V4 is where a real opponent arrives.
-    target: TARGET_TANK,
+    // A real opponent from V4: it drives, traverses, fires, and can be destroyed. Its input comes from
+    // `EnemyController` inside the simulation, through the same `InputCommand` the player's keyboard
+    // produces, so every combat rule applies to it identically.
+    target: ENEMY_TANK,
   });
+
+  // The encounter wraps the simulation rather than living inside it: `Simulation` knows physics,
+  // `Battle` knows what winning means. Restart resets both.
+  const battle = new Battle(simulation);
 
   // --- Physics (Rapier, for queries only) --------------------------------------------
   // Initialising this decodes an inlined WASM module, so it is awaited before the first frame.
@@ -72,18 +90,24 @@ async function bootstrap(): Promise<void> {
   engine.setHardwareScalingLevel(1);
 
   const { scene, camera } = createScene(engine, simulation.terrain);
-  const tankVisual = new TankVisual(scene, simulation.vehicle.definition);
+  const tankVisual = new TankVisual(scene, simulation.vehicle.definition, 'player');
   const orbitCamera = new OrbitCamera(camera, physics);
   const effects = new ShellEffects(scene);
 
-  // The stationary test target, drawn from the same visual code as the player's tank, so a change to
-  // the placeholder model applies to both and nothing about rendering the target is special-cased.
-  // The one difference is the accent colour: two identical olive tanks on an olive field left the
-  // player unable to tell which vehicle was theirs at combat range.
+  // Prototype combat audio. Created lazily on the first user gesture, because browsers refuse to start
+  // an AudioContext before one, and a silent game that only becomes audible after the first click reads
+  // as broken.
+  const audio = new CombatAudio();
+
+  // The opponent, drawn from the same visual code as the player's tank so a model change applies to
+  // both. It uses the `opponent` variant, which differs the **silhouette** (longer hull, lower rounded
+  // turret, deeper bustle) as well as the palette. Shape rather than colour alone, because two tanks
+  // differing only in colour are genuinely hard to tell apart at range, through fog, or for a
+  // colour-blind player.
   const targetVisual =
     simulation.target === null
       ? null
-      : new TankVisual(scene, simulation.target.definition, TARGET_ACCENT);
+      : new TankVisual(scene, simulation.target.definition, 'opponent');
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
@@ -102,7 +126,69 @@ async function bootstrap(): Promise<void> {
   // not also shoot.
   canvas.addEventListener('click', () => {
     input.requestPointerLock();
+    // Browsers refuse to start an AudioContext before a gesture. Unlocking on the same click the player
+    // already makes to capture the mouse means audio never silently fails to start.
+    audio.unlock();
   });
+
+  /**
+   * Whether a restart was requested this frame.
+   *
+   * A flag rather than an immediate call so restart always happens at a frame boundary, between ticks,
+   * never in the middle of one. Restarting mid-tick would leave a shell resolved against a tank whose
+   * state had already been reset.
+   */
+  let restartRequested = false;
+
+  /**
+   * Steps the encounter by a real elapsed duration.
+   *
+   * Mirrors `Simulation.advance`: real time accumulates and whole fixed ticks run. Written here rather
+   * than delegated because the battle needs its tick count, and asking the battle to expose it would
+   * be a wider API than this needs.
+   */
+  function advanceBattle(deltaSeconds: number, cmd: InputCommand): void {
+    if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+      return;
+    }
+    battleAccumulatorSeconds += deltaSeconds;
+    let ticks = 0;
+    while (battleAccumulatorSeconds >= BATTLE_TICK_DT && ticks < MAX_BATTLE_CATCHUP_TICKS) {
+      battleAccumulatorSeconds -= BATTLE_TICK_DT;
+      battle.tick(cmd);
+      ticks += 1;
+    }
+    if (battleAccumulatorSeconds > BATTLE_TICK_DT) {
+      battleAccumulatorSeconds = 0;
+    }
+  }
+
+  let battleAccumulatorSeconds = 0;
+
+  /**
+   * Returns the encounter to its opening state without reloading the page.
+   *
+   * Resets everything that accumulates during a fight, and **clears the transient visual effects** as
+   * well as the simulation state. That last part is the one that is easy to miss and the one that makes
+   * a restart feel broken: leave the shells and impact markers in place and the new battle visibly
+   * begins with debris from the last one, including shell tracers still flying.
+   *
+   * Deliberately does **not** reset `distanceDrivenM` or re-show the briefing: a player restarting after
+   * a loss already knows how to drive, and making them re-read the introduction every attempt would be
+   * an annoyance rather than a fresh start.
+   */
+  function restartEncounter(): void {
+    battle.restart();
+    effects.clear();
+    // Re-anchor the camera, which is otherwise left wherever the previous battle ended.
+    orbitCamera.snapToTarget();
+    lastPosition = simulation.vehicle.state.position;
+    shotsFiredLastFrame = simulation.telemetry.shotsFired;
+    lastBannerTick = -1;
+    hud.hideBattleOutcome();
+    hud.showRestartHint(true);
+    audio.silenceEngines(1);
+  }
 
   // --- Frame loop ----------------------------------------------------------------------
   let lastFrameTimeMs = performance.now();
@@ -116,6 +202,8 @@ async function bootstrap(): Promise<void> {
    * still present in the simulation's combat log.
    */
   let lastBannerTick = -1;
+  /** Tick the incoming-hit banner last fired on, so it appears once per hit rather than every frame. */
+  let lastIncomingTick = -1;
 
   engine.runRenderLoop(() => {
     // 1. Real elapsed time, clamped so a stall cannot teleport the vehicle.
@@ -136,9 +224,23 @@ async function bootstrap(): Promise<void> {
         ? input.readDrivingInput(deltaSeconds, aim)
         : makeInput(inputFrame.throttle, inputFrame.steer, inputFrame.aim, inputFrame.fire);
 
-    // 4. Advance the simulation in whole fixed ticks, then refresh the physics queries.
-    simulation.advance(deltaSeconds, command);
+    // 4. Advance the encounter in whole fixed ticks, then refresh the physics queries.
+    //
+    // `Battle` wraps the simulation so the win condition lives outside the physics core. It also owns
+    // the short opening delay and the freeze on a finished battle, so the frame loop does not have to
+    // know about any of that.
+    //
+    // The opening delay means the accumulator is advanced here but the simulation is stepped by the
+    // battle, so the two are not advanced separately: doing both would run the player's input twice.
+    advanceBattle(deltaSeconds, command);
     physics.step();
+
+    // Restart is polled here rather than bound to a key handler, so it works whether or not the pointer
+    // is locked and cannot be missed on the frame the banner appears.
+    if (restartRequested) {
+      restartRequested = false;
+      restartEncounter();
+    }
 
     const state = simulation.vehicle.state;
 
@@ -215,8 +317,90 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 9. Target status strip. Updated every frame rather than on change, because the range readout is
-    //    continuous — the player watches it shrink as they close, which is the cue for when to shoot.
+    // 9. Incoming hits on the player. Reported separately from `combat` because "it hit me" is the most
+    //    urgent thing on screen and must not be mistaken for "I hit it". Without this the player could
+    //    not tell, from the feedback alone, which side of the exchange a penetration belonged to.
+    if (simulation.incomingCombat.length > 0) {
+      const incoming = simulation.incomingCombat[simulation.incomingCombat.length - 1]!;
+      if (lastIncomingTick !== simulation.tickCount) {
+        lastIncomingTick = simulation.tickCount;
+        const verdict =
+          incoming.kind === 'ricocheted'
+            ? 'RICOCHETED'
+            : incoming.kind === 'blocked'
+              ? 'BLOCKED'
+              : incoming.kind === 'armour-miss'
+                ? 'MISSED'
+                : 'HIT';
+        const sub =
+          incoming.kind === 'penetrated'
+            ? `−${incoming.damage.vehicleDamage} HP · ${incoming.plate.definition.region}`
+            : incoming.kind === 'armour-miss'
+              ? ''
+              : incoming.plate.definition.region;
+        hud.showIncomingHit(verdict, incoming.kind, sub);
+      }
+
+      // Sound by outcome, so the player learns the four cases apart by ear.
+      const rangeM = distanceBetween(camera.position, incomingImpactPoint(incoming));
+      if (incoming.kind === 'ricocheted') {
+        audio.ricochet(rangeM);
+      } else if (incoming.kind === 'blocked') {
+        audio.impact(rangeM);
+      } else if (incoming.kind === 'armour-miss') {
+        audio.dirt(rangeM);
+      } else {
+        audio.impact(rangeM);
+        audio.destroy(rangeM * 0.4);
+        // A short screen shake on a penetration that hurts. Restrained on purpose: it is there to
+        // make the hit *felt*, and an effect the player cannot control is an annoyance.
+        orbitCamera.shake(HIT_SHAKE_SECONDS, HIT_SHAKE_MAGNITUDE);
+      }
+    }
+
+    // 10. Outgoing shot and impact sounds, plus the muzzle flash.
+    if (shotsFiredThisFrame > 0) {
+      audio.fire(0);
+      effects.showMuzzleFlash(simulation.vehicle.gunPivotPosition);
+    }
+    for (const impact of simulation.impacts) {
+      const rangeM = distanceBetween(camera.position, impact.position);
+      if (impact.targetKind === 'vehicle') {
+        if (impact.targetId === simulation.vehicle.definition.id) {
+          continue; // Already handled as an incoming hit above.
+        }
+        audio.impact(rangeM);
+      } else {
+        audio.dirt(rangeM);
+      }
+    }
+
+    // 11. Battle outcome. Checked after combat so a killing shot is reflected in the same frame.
+    if (battle.state === 'victory' || battle.state === 'defeat') {
+      const won = battle.state === 'victory';
+      audio.destroy(won ? distanceBetween(camera.position, simulation.target?.state.position ?? camera.position) : 0);
+      hud.showBattleOutcome(
+        won,
+        simulation.telemetry.shotsFired,
+        simulation.target?.telemetry.shotsFired ?? 0,
+        simulation.vehicle.damage.hitPoints,
+        simulation.target?.damage.hitPoints ?? 0,
+      );
+      hud.showRestartHint(true);
+    }
+
+    // 12. Engine loops, driven from each vehicle's own speed.
+    audio.updateEngines(
+      simulation.vehicle.state.speedMps,
+      simulation.vehicle.definition.powertrain.maxSpeedMps,
+      simulation.target?.state.speedMps ?? 0,
+      simulation.target?.definition.powertrain.maxSpeedMps ?? 1,
+      simulation.target !== null && !simulation.target.damage.destroyed,
+      deltaSeconds,
+    );
+
+    // 13. Opponent status strip. Updated every frame rather than on change, because the range readout is
+    //     continuous — the player watches it shrink as they close, which is the cue for when to shoot.
     if (simulation.target !== null) {
       const t = simulation.target;
       const dx = t.state.position.x - state.position.x;
@@ -231,6 +415,19 @@ async function bootstrap(): Promise<void> {
     } else {
       hud.updateTargetStatus(null);
     }
+
+    // 14. The player's own condition. The module consequences are summarised rather than itemised: a
+    //     player who has lost a track needs to know their mobility is impaired, not to read the
+    //     internal module id.
+    const playerDamage = simulation.vehicle.damage;
+    hud.updatePlayerStatus({
+      hp: playerDamage.hitPoints,
+      maxHp: playerDamage.maxHitPoints,
+      destroyed: playerDamage.destroyed,
+      immobilised: simulation.vehicle.telemetry.immobilised,
+      tracksDestroyed: simulation.vehicle.telemetry.tracksDestroyed,
+      gunDisabled: simulation.vehicle.telemetry.gunDisabled,
+    });
 
     hud.tick(deltaSeconds);
 
@@ -260,6 +457,17 @@ async function bootstrap(): Promise<void> {
   window.addEventListener('keydown', (event) => {
     if (event.key === 'f' || event.key === 'F') {
       hud.toggleDebug();
+    }
+    // Restart on R. Bound on the window rather than through the input manager because it must work
+    // whether or not the pointer is locked — the player is very likely reading the end screen without
+    // the pointer captured, and a restart that only worked with the pointer locked would fail exactly
+    // when it is most wanted. Also accepted while the battle is running, so a player who wants to reset
+    // a hopeless fight is not forced to lose it first.
+    if (event.key === 'r' || event.key === 'R') {
+      restartRequested = true;
+    }
+    if (event.key === 'm' || event.key === 'M') {
+      audio.setMuted(!audio.isMuted);
     }
   });
 
@@ -341,6 +549,25 @@ function resolveAimPoint(
     y: groundY === null ? cameraPosition.y + uy * MAX_AIM_RANGE_M : Math.max(groundY.point.y, cameraPosition.y + uy * MAX_AIM_RANGE_M),
     z: farZ,
   };
+}
+
+/** Placeholder origin used when a combat result carries no impact point. */
+const CAMERA_FALLBACK_POINT: Vec3 = { x: 0, y: 0, z: 0 };
+
+/**
+ * Where a combat result's shell struck, for audio attenuation.
+ *
+ * An `armour-miss` is the one variant with no impact point, because the shell passed through the space
+ * the vehicle occupies without touching a plate. It is returned as the camera position, which makes the
+ * sound play at full volume — correct, since "the shot went past" is a close-range observation anyway.
+ */
+function incomingImpactPoint(result: CombatResult): { x: number; y: number; z: number } {
+  if (result.kind === 'armour-miss') {
+    // No plate was struck, so there is no point to attenuate by. Playing at the camera is right: an
+    // armour miss means the shell went past at close range, where it would be loud anyway.
+    return CAMERA_FALLBACK_POINT;
+  }
+  return result.impactPoint;
 }
 
 /** Distance between two points. */

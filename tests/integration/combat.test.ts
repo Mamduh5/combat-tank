@@ -4,10 +4,11 @@ import { resolveCombat, type CombatResult } from '../../src/core/combat/combat-r
 import { buildWorldPlates, raycastPlates } from '../../src/core/armor/geometry.js';
 import { type ShellImpact } from '../../src/core/ballistics/impact.js';
 import { createDamageState, findModule } from '../../src/core/damage/damage-model.js';
-import { makeInput } from '../../src/shared/input.js';
+import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 import { vec3 } from '../../src/shared/vec3.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
 import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
+import { ENEMY_TANK } from '../../src/shared/enemy-tank.js';
 
 /**
  * End-to-end combat tests: impact record → armour → penetration → damage.
@@ -102,6 +103,10 @@ describe('through the simulation', () => {
       target: TARGET_TANK,
       terrain: { seed: 1, halfSizeM: 2000, amplitudeM: 0, edgeRiseM: 0 },
       spawn: vec3(0, 0, 0),
+      // `targetIsOpponent: false` restores the V3 inert target: no controller, so it stays exactly
+      // where it is put and never fires. The armour tests below need a fixed object to shoot at, and
+      // a target that slews or drives between the setup and the shot would make them untestable.
+      targetIsOpponent: false,
     });
   }
 
@@ -160,45 +165,89 @@ describe('through the simulation', () => {
     expect(target.damage.hitPoints).toBeLessThan(hpBefore);
   });
 
-  it('does not let the target drive, aim or fire on its own', () => {
-    // A stationary test target, not an opponent. This is the boundary V4 will move.
-    const sim = simWithTarget();
-    const target = sim.target!;
-    const startPosition = target.state.position;
-    const startHeading = target.state.headingRad;
+  it('drives, aims and fires the opponent through the same rules as the player', () => {
+    // V4 inverted this test. In V3 it asserted the target could do *nothing* on its own, which pinned
+    // the "stationary test target" boundary. V4 replaces that boundary with an opponent, so the
+    // assertion becomes that it acts — but only through the normal input interface.
+    //
+    // The important part is what this does *not* check: it never calls a damage method. If the opponent
+    // were damaging the player on a timer, every one of these assertions would still pass. That is why
+    // the enemy-damage tests below are the ones that actually prove the combat rules are shared.
+    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const enemy = sim.target!;
+    const startPosition = { ...enemy.state.position };
 
-    for (let i = 0; i < 300; i += 1) {
-      sim.tick(makeInput(1, 1, vec3(0, 0, 60), false));
+    for (let i = 0; i < 600; i += 1) {
+      sim.tick(makeInput(1, 0, vec3(0, 0, 60), false));
     }
 
-    expect(target.state.speedMps).toBe(0);
-    expect(target.telemetry.shotsFired).toBe(0);
-    expect(target.state.position.x).toBeCloseTo(startPosition.x, 9);
-    expect(target.state.position.z).toBeCloseTo(startPosition.z, 9);
-    expect(target.state.headingRad).toBeCloseTo(startHeading, 9);
+    // It moved off its spawn.
+    expect(
+      Math.abs(enemy.state.position.x - startPosition.x) +
+        Math.abs(enemy.state.position.z - startPosition.z),
+    ).toBeGreaterThan(1);
+
+    // It acquired a target and used its gun through the normal reload cycle.
+    expect(enemy.telemetry.shotsFired).toBeGreaterThan(0);
   });
 
-  it('leaves a destroyed target unable to move', () => {
+  it('keeps the opponent inside the same reload rules as the player', () => {
+    // The gun's authority lives in the core, not in the controller. If the opponent could fire while
+    // reloading, that would be a second rule set — exactly what V4 was told not to build.
+    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const enemy = sim.target!;
+
+    for (let i = 0; i < 1200; i += 1) {
+      // Record the state *before* stepping, so a tick that both reloads and refuses to fire is counted.
+      const wasLoaded = enemy.gunState.loadState === 'loaded';
+      const shotsBefore = enemy.gunState.shotsFired;
+      sim.tick(NEUTRAL_INPUT);
+      if (!wasLoaded && enemy.gunState.shotsFired > shotsBefore) {
+        throw new Error('opponent fired while its gun was reloading');
+      }
+    }
+  });
+
+  it('reports hits on the player separately from hits on the opponent', () => {
+    // The HUD has to be able to tell the player "you hit it" from "it hit you", and it cannot infer that
+    // from a single undifferentiated list.
+    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+
+    for (let i = 0; i < 1800; i += 1) {
+      sim.tick(NEUTRAL_INPUT);
+    }
+
+    // The opponent was left alone, so anything recorded as incoming really did come from the enemy.
+    expect(sim.target!.damage.hitPoints).toBe(ENEMY_TANK.survivability.hitPoints);
+    expect(sim.incomingCombat).toEqual([]);
+  });
+
+  it('leaves a destroyed vehicle unable to move, on either side', () => {
+    // Asserted on the **player**, not on the configured target. The target in `simWithTarget` is the
+    // inert V3 object with no controller, so it is never stepped with intent and its telemetry is
+    // never refreshed — asserting on it would test nothing. In V4 the player's tank is the vehicle a
+    // player can actually destroy, so it is the one whose consequences matter.
+    //
+    // The same rule has to apply to the opponent, which is covered separately below with a real
+    // controller attached.
     const sim = simWithTarget();
-    const target = sim.target!;
 
     // Set destruction directly: the point under test is the consequence, not the route to it.
-    target.damage.hitPoints = 0;
-    target.damage.destroyed = true;
+    sim.vehicle.damage.hitPoints = 0;
+    sim.vehicle.damage.destroyed = true;
 
     for (let i = 0; i < 120; i += 1) {
       sim.tick(makeInput(1, 0, vec3(0, 0, 60), false));
     }
 
-    expect(target.telemetry.destroyed).toBe(true);
-    expect(target.telemetry.immobilised).toBe(true);
-    expect(target.state.speedMps).toBeCloseTo(0, 9);
+    expect(sim.vehicle.telemetry.destroyed).toBe(true);
+    expect(sim.vehicle.telemetry.immobilised).toBe(true);
+    expect(sim.vehicle.state.speedMps).toBeCloseTo(0, 9);
   });
 
-  it('disables the gun when the gun module is destroyed', () => {
+  it('disables the gun of a destroyed module, on either side', () => {
     const sim = simWithTarget();
-    const target = sim.target!;
-    const gun = target.damage.modules.find((m) => m.effect === 'gun')!;
+    const gun = sim.vehicle.damage.modules.find((m) => m.effect === 'gun')!;
     gun.hitPoints = 0;
     gun.destroyed = true;
 
@@ -206,8 +255,35 @@ describe('through the simulation', () => {
       sim.tick(makeInput(0, 0, vec3(0, 0, 60), true));
     }
 
-    expect(target.telemetry.gunDisabled).toBe(true);
-    expect(target.telemetry.shotsFired).toBe(0);
+    expect(sim.vehicle.telemetry.gunDisabled).toBe(true);
+    expect(sim.vehicle.telemetry.shotsFired).toBe(0);
+  });
+
+  it('leaves a destroyed opponent unable to move or fire', () => {
+    // The V4-specific version: with a controller attached, a destroyed opponent must still be inert.
+    // The controller is responsible for noticing it is destroyed and emitting a neutral command; this
+    // test is what proves that path actually works rather than merely being written.
+    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const enemy = sim.target!;
+
+    enemy.damage.hitPoints = 0;
+    enemy.damage.destroyed = true;
+    const positionAtDeath = { ...enemy.state.position };
+    const shotsAtDeath = enemy.telemetry.shotsFired;
+
+    for (let i = 0; i < 300; i += 1) {
+      sim.tick(NEUTRAL_INPUT);
+    }
+
+    expect(enemy.telemetry.destroyed).toBe(true);
+    expect(enemy.telemetry.immobilised).toBe(true);
+    expect(enemy.state.speedMps).toBeCloseTo(0, 9);
+    expect(Math.hypot(
+      enemy.state.position.x - positionAtDeath.x,
+      enemy.state.position.z - positionAtDeath.z,
+    )).toBeLessThan(0.001);
+    expect(enemy.telemetry.shotsFired).toBe(shotsAtDeath);
+    expect(sim.enemyController!.state).toBe('disabled');
   });
 });
 

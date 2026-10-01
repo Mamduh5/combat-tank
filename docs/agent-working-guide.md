@@ -266,3 +266,35 @@ Before finishing any change:
 - [ ] Assumptions were recorded in `docs/assumptions.md`.
 - [ ] Anything undecided was added to `docs/open-decisions.md` rather than silently decided.
 - [ ] The report says what was verified, how, and what was not finished.
+
+---
+
+## V4 additions: working on the encounter
+
+**The opponent is not a damage source.** If you are changing combat, the property to protect is that
+`src/core/ai/enemy-controller.ts` has no path to the damage model. It emits an `InputCommand` and nothing
+else. If you find yourself wanting to make the enemy "hit harder", change `ENEMY_TUNING.aimErrorDeg` or
+its vehicle definition, never the resolver.
+
+**`Simulation.tick` is symmetric now.** `shellObstacles()` contains both vehicles, and a shell skips the
+obstacle whose id matches its own `shooterId`. When adding a third vehicle, extend the obstacle list
+there and remember the self-exclusion is by id.
+
+**`targetIsOpponent: false`** restores the V3 inert target. Use it in any test or tool that needs a
+tank that stays exactly where it was put; a fighting opponent moves between setup and the shot, which
+makes positional assertions meaningless.
+
+**`slopeDegreesAlong` requires a unit direction.** It projects the gradient onto whatever vector it is
+given, so `(4, 0)` reports four times the true slope. This caused a real, expensive misdiagnosis in V4:
+a 29-degree slope read as 66 degrees, which made authored terrain look unusable and sent a tuning pass
+the wrong way. Normalise the direction.
+
+**Derived consequences beat stored consequences.** Track damage is computed from module state every
+tick rather than accumulated as a "wear" value, precisely so a restart is exactly reversible. Follow
+that pattern for any new damage effect.
+
+**Visual verification is not optional.** V4's arena amplitude, spawn bias, camera distance and briefing
+position were all wrong in ways every automated gate passed, and each was found by looking at a
+screenshot or by measuring the running simulation. The terrain amplitude in particular was cut from 9 m
+to 5 m because a probe measured the opponent spawning 14 m below the player on ground neither vehicle
+could manoeuvre on. When something looks wrong, write a probe and measure before changing a constant.

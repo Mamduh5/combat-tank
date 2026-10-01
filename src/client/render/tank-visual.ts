@@ -2,13 +2,20 @@ import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
 import type { VehicleState } from '../../core/vehicle/vehicle-state.js';
-import { TANK_PROPORTIONS, TANK_COLORS, makeMaterial } from './tank-proportions.js';
+import {
+  TANK_PROPORTIONS,
+  TANK_COLORS,
+  TANK_DETAIL,
+  OPPONENT_COLORS,
+  makeMaterial,
+  type TankPalette,
+} from './tank-proportions.js';
 
 /** Wreck tint. Cold and dark, so a destroyed tank reads as inert at a glance. */
 const DESTROYED_TINT = new Color3(0.13, 0.13, 0.15);
@@ -17,18 +24,48 @@ const DESTROYED_TINT = new Color3(0.13, 0.13, 0.15);
 const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
 
 /**
- * Placeholder tank, assembled from primitives.
+ * The V4 prototype tank model: a low/mid-poly vehicle assembled procedurally.
  *
- * The mesh is built from the **vehicle definition's own dimensions**, not from constants, so
- * changing a tank's size in data visibly changes the model. That is the practical test of the
- * placeholder-first discipline: V12 replaces this with real art by changing what `visualId`
- * resolves to, and nothing in the simulation has to change.
+ * ## Asset provenance — created in-project, no external files
  *
- * Silhouette: a lower hull, two track units, a turret block, and a gun barrel. The turret and the
- * barrel are **separate transform nodes** rather than parts of the hull mesh, because they rotate
- * independently of it. The mesh hierarchy mirrors the simulation's structure — hull, then turret, then
- * barrel — so the hull's rotation carries the turret automatically and the two can never disagree
- * about which way the gun is pointing.
+ * Every mesh here is generated in code from the vehicle definition's own dimensions. Nothing is
+ * imported, downloaded, or licensed. That was a deliberate choice for the first real-asset version:
+ * sourcing a model would have introduced redistribution questions and a licence to track, and the
+ * point of this version is to establish *that* the game looks like it contains tanks. When production
+ * art replaces this, it will be loaded by `visualId` and nothing in the simulation changes — that is
+ * the property ADR-0003 promised, and this file is where it gets exercised.
+ *
+ * ## What makes it read as a tank
+ *
+ * The V3R model was boxes: a tapered hull, two slabs for tracks, a block for a turret. That was a
+ * legible improvement on a bare box, but at combat range it still read as geometry standing in for a
+ * tank. The specific features that carry recognition, each added for a reason:
+ *
+ *  - **A sloped upper glacis and a vertical lower plate**, so the hull front has a *shape* rather than
+ *    being a flat face. This is the single strongest silhouette cue for "this is the front".
+ *  - **A tapered, faceted turret with a cast mantlet**, giving the turret a distinct top outline
+ *    instead of a cube, plus a rear bustle that overhangs — which is what makes a turret look like a
+ *    turret rather than a lid.
+ *  - **Track links**, visible as a repeated pattern along each track's outer face, so the running gear
+ *    reads as *tracked* rather than as a dark skirt. Wheels alone were not enough at range.
+ *  - **Return rollers, drive sprocket and idler** at the ends of each track, which give each track unit
+ *    a definite front and back.
+ *  - **Fenders over the tracks**, catching light along the top edge.
+ *  - **A mantlet and muzzle brake** at the barrel's root and tip.
+ *
+ * ## Two distinguishable variants
+ *
+ * The opponent uses a different **silhouette**, not just a different colour: a longer, lower hull and a
+ * rounded, cast-looking turret against the player's slab-sided turret and shorter hull. Colour alone
+ * was the V3R approach and it is not enough — at range, in fog, or for a colour-blind player, two tanks
+ * of different colours in the same shape are genuinely hard to tell apart. A shape difference is
+ * legible at any distance and in any lighting.
+ *
+ * ## Hierarchy
+ *
+ * The turret and barrel are **separate transform nodes**, mirroring the simulation's structure — hull,
+ * then turret, then barrel — so rotating the hull carries the turret automatically and the two can
+ * never disagree about which way the gun is pointing.
  */
 
 /**
@@ -42,6 +79,62 @@ export interface TurretVisualState {
   readonly localAngleRad: number;
   /** Gun elevation above the turret's horizontal plane, radians. Positive is up. */
   readonly elevationRad: number;
+}
+
+/**
+ * Which of the two prototype vehicles to build.
+ *
+ * The distinction is a **silhouette** difference rather than a recolour, for the reason given on
+ * `TankVisual`. Both are generated from the same builder; the variant selects proportions and which
+ * detail parts are included, so adding a third vehicle later is a new entry here rather than new code.
+ */
+export type TankVariant = 'player' | 'opponent';
+
+/**
+ * Silhouette and palette differences between the two vehicles.
+ *
+ * Kept as data rather than branching through the builder, so the builder stays one piece of logic and
+ * the "what makes these two look different" decision is readable in one place.
+ *
+ * The opponent is **longer and lower with a rounded turret**: a longer hull, a shallower turret, and a
+ * bustle that overhangs further. Those three differences change the outline from every angle, which is
+ * what makes the two tellable apart at 60 m through fog.
+ */
+const VARIANT_SPECS: Record<TankVariant, VariantSpec> = {
+  player: {
+    // Compact hull, taller slab-sided turret with a flat roof and a pronounced rear bustle.
+    hullLengthScale: 1,
+    turretLengthScale: 1,
+    turretHeightScale: 1,
+    turretTaper: 0.62,
+    bustleLengthM: 0.5,
+    /** Player: flat-topped, straight-sided turret. */
+    turretFacets: 6,
+    palette: TANK_COLORS,
+  },
+  opponent: {
+    // Longer hull, lower turret, and a wider taper so the turret reads as rounded rather than slab.
+    hullLengthScale: 1.1,
+    turretLengthScale: 1.08,
+    turretHeightScale: 0.82,
+    turretTaper: 0.44,
+    bustleLengthM: 0.85,
+    /** Fewer facets reads as a cast/rounded turret; the player's 6 reads as welded and angular. */
+    turretFacets: 8,
+    palette: OPPONENT_COLORS,
+  },
+};
+
+interface VariantSpec {
+  readonly hullLengthScale: number;
+  readonly turretLengthScale: number;
+  readonly turretHeightScale: number;
+  /** How much the turret narrows toward its top, as a fraction. Higher is more sloped. */
+  readonly turretTaper: number;
+  /** How far the turret's rear overhangs the hull, metres. */
+  readonly bustleLengthM: number;
+  readonly turretFacets: number;
+  readonly palette: TankPalette;
 }
 
 export class TankVisual {
@@ -62,177 +155,310 @@ export class TankVisual {
   private destroyed = false;
 
   /**
-   * @param accent Optional body colour override, used to make the stationary target visually distinct
-   *   from the player's own vehicle. Defaults to the standard hull olive.
+   * @param variant Which vehicle this is. The opponent is built with a different silhouette, not just a
+   *   different colour, because two tanks of different colours in the same shape are genuinely hard to
+   *   tell apart at range or for a colour-blind player. A shape difference is legible always.
+   * @param accent Optional body colour override, layered on top of the variant's own palette.
    */
-  constructor(scene: Scene, definition: VehicleDefinition, accent?: Color3) {
-    const { lengthM, widthM, heightM } = definition.dimensions;
+  constructor(
+    scene: Scene,
+    definition: VehicleDefinition,
+    variant: TankVariant = 'player',
+    accent?: Color3,
+  ) {
+    const spec = VARIANT_SPECS[variant];
+    const palette = spec.palette;
+    const { widthM, heightM } = definition.dimensions;
+    const lengthM = definition.dimensions.lengthM * spec.hullLengthScale;
+
     const trackHeightM = TANK_PROPORTIONS.trackHeightFraction * heightM;
     const hullHeightM = heightM * 0.62;
     const roofHeightM = trackHeightM + hullHeightM;
-    const bodyColor = accent ?? TANK_COLORS.hull;
-    const turretColor = accent ? accent.scale(1.12) : TANK_COLORS.turret;
+    const bodyColor = accent ?? palette.hull;
+    const turretColor = accent ? accent.scale(1.12) : palette.turret;
 
     this.root = new TransformNode('tank-root', scene);
     this.accent = accent;
 
-    // Sloped front plate (glacis).
-    //
-    // A tapered box rather than a plain one, because orientation was the hardest thing to read about
-    // the old model: a rectangular slab looks the same from every side, so the player could not tell
-    // which way their tank was pointing without consulting the HUD. The taper gives the front a
-    // distinct, unmistakable shape.
-    //
-    // Built as a custom wedge rather than a scaled primitive. A three-sided cylinder was tried first and
-    // is the wrong tool: scaling it stretched the apex into a metre-long black spike that swallowed the
-    // turret. A wedge needs the front face pulled *in* on two axes while the roof stays flat, which
-    // `CreateCylinder` cannot express.
-    const hull = buildGlacisHull(scene, 'tank-hull', {
-      widthM: widthM * TANK_PROPORTIONS.hullWidthFraction,
-      heightM: hullHeightM,
+    // --- Hull: sloped glacis with a vertical lower plate --------------------------------
+    // Two pieces rather than one tapered wedge. A single taper slopes the *whole* front, which reads as
+    // a boat bow; a real tank has a vertical or near-vertical lower plate with a sloped upper glacis
+    // above it, and that two-part profile is a much stronger "this is a tank" cue than the taper alone.
+    const hullBodyWidthM = widthM * TANK_PROPORTIONS.hullWidthFraction;
+
+    // Upper glacis: the sloping plate, running from the roof down and forward.
+    const glacis = buildGlacisHull(scene, 'tank-glacis', {
+      widthM: hullBodyWidthM,
+      heightM: hullHeightM * GLACIS_HEIGHT_FRACTION,
       lengthM: lengthM * 0.92,
       taperFraction: TANK_PROPORTIONS.glacisTaperFraction,
     });
-    hull.position.y = roofHeightM - hullHeightM / 2;
-    hull.material = makeMaterial(scene, 'tank-hull-mat', bodyColor);
-    hull.parent = this.root;
+    glacis.position.y = roofHeightM - (hullHeightM * GLACIS_HEIGHT_FRACTION) / 2;
+    glacis.material = makeMaterial(scene, 'tank-glacis-mat', bodyColor);
+    glacis.parent = this.root;
 
-    // Two track units flanking the hull, each with visible road wheels and a fender.
+    // Lower plate: vertical, narrower, tucked under the glacis. Present mostly at the nose, which is
+    // what makes the profile read as two distinct surfaces catching light differently.
+    const lowerPlate = MeshBuilder.CreateBox(
+      'tank-lower-plate',
+      {
+        width: hullBodyWidthM * LOWER_PLATE_WIDTH_FRACTION,
+        height: hullHeightM * (1 - GLACIS_HEIGHT_FRACTION),
+        depth: lengthM * LOWER_PLATE_DEPTH_FRACTION,
+      },
+      scene,
+    );
+    lowerPlate.position.set(
+      0,
+      roofHeightM - hullHeightM + (hullHeightM * (1 - GLACIS_HEIGHT_FRACTION)) / 2,
+      lengthM * (0.92 / 2) - (lengthM * LOWER_PLATE_DEPTH_FRACTION) / 2,
+    );
+    lowerPlate.material = makeMaterial(scene, 'tank-lower-plate-mat', bodyColor.scale(0.86));
+    lowerPlate.parent = this.root;
+
+    // --- Running gear -------------------------------------------------------------------
     const wheelRadiusM = TANK_PROPORTIONS.roadWheelRadiusFraction * trackHeightM;
+    const trackSpan = lengthM * TANK_PROPORTIONS.trackLengthFraction;
+    const trackWidthM = widthM * TANK_PROPORTIONS.trackWidthFraction;
+    const trackCentreX = widthM * (0.5 - trackWidthM / widthM / 2);
+
     for (const side of [-1, 1] as const) {
       const track = MeshBuilder.CreateBox(
         `tank-track-${side}`,
-        {
-          width: widthM * TANK_PROPORTIONS.trackWidthFraction,
-          height: trackHeightM,
-          depth: lengthM * TANK_PROPORTIONS.trackLengthFraction,
-        },
+        { width: trackWidthM, height: trackHeightM, depth: trackSpan },
         scene,
       );
-      track.position.set(
-        side * widthM * (0.5 - TANK_PROPORTIONS.trackWidthFraction / 2),
-        trackHeightM / 2,
-        0,
-      );
-      track.material = makeMaterial(scene, `tank-track-mat-${side}`, TANK_COLORS.track);
+      track.position.set(side * trackCentreX, trackHeightM / 2, 0);
+      track.material = makeMaterial(scene, `tank-track-mat-${side}`, palette.track);
       track.parent = this.root;
 
+      // Drive sprocket (rear) and idler (front), larger than the road wheels.
+      //
+      // These are what give the vehicle a readable *orientation* from its running gear alone: without
+      // them both ends of the track look identical and the tank has no visible front.
+      const sprocketRadiusM = TANK_DETAIL.sprocketRadiusFraction * trackHeightM;
+      for (const [name, z] of [
+        ['sprocket', -trackSpan / 2 + sprocketRadiusM * 0.4],
+        ['idler', trackSpan / 2 - sprocketRadiusM * 0.4],
+      ] as const) {
+        const end = MeshBuilder.CreateCylinder(
+          `tank-${name}-${side}`,
+          { height: trackWidthM * 0.92, diameter: sprocketRadiusM * 2, tessellation: 12 },
+          scene,
+        );
+        end.rotation.z = Math.PI / 2;
+        end.position.set(side * trackCentreX, trackHeightM * 0.55, z);
+        end.material = makeMaterial(scene, `tank-${name}-mat-${side}`, palette.wheel);
+        end.parent = this.root;
+      }
+
       // Road wheels, proud of the track face so they catch light and read individually.
-      for (let i = 0; i < TANK_PROPORTIONS.roadWheelCount; i += 1) {
+      const wheelCount = TANK_PROPORTIONS.roadWheelCount;
+      for (let i = 0; i < wheelCount; i += 1) {
         const wheel = MeshBuilder.CreateCylinder(
           `tank-wheel-${side}-${i}`,
           { height: 0.12, diameter: wheelRadiusM * 2, tessellation: 10 },
           scene,
         );
-        // Wheels are cylinders along Y; lay them along X to face outward from the hull's side.
+        // Cylinders are built along Y; lay them along X to face outward from the hull's side.
         wheel.rotation.z = Math.PI / 2;
-        const span = lengthM * TANK_PROPORTIONS.trackLengthFraction;
-        const wheelCount = TANK_PROPORTIONS.roadWheelCount;
-        // Spaced evenly from the rear of the track to the front, so the wheels span its full length.
-        const offset =
-          wheelCount <= 1 ? 0 : -span / 2 + (span / (wheelCount - 1)) * i;
+        const offset = wheelCount <= 1 ? 0 : -trackSpan / 2 + (trackSpan / (wheelCount - 1)) * i;
         wheel.position.set(
-          side * widthM * (0.5 - TANK_PROPORTIONS.trackWidthFraction / 2 + 0.06),
+          side * (trackCentreX + trackWidthM * 0.5 + 0.03),
           wheelRadiusM + 0.06,
           offset,
         );
-        wheel.material = makeMaterial(scene, `tank-wheel-mat-${side}-${i}`, TANK_COLORS.wheel);
+        wheel.material = makeMaterial(scene, `tank-wheel-mat-${side}-${i}`, palette.wheel);
         wheel.parent = this.root;
       }
 
-      // Fender: a thin shelf over the track that gives the side profile a distinct top edge.
+      // Return rollers, high on the track face. Their absence is why a run of road wheels alone still
+      // reads as a wheeled vehicle with a skirt rather than as a tank.
+      const rollerRadiusM = TANK_DETAIL.returnRollerRadiusFraction * trackHeightM;
+      for (let i = 0; i < TANK_DETAIL.returnRollerCount; i += 1) {
+        const f = (i + 1) / (TANK_DETAIL.returnRollerCount + 1);
+        const roller = MeshBuilder.CreateCylinder(
+          `tank-roller-${side}-${i}`,
+          { height: 0.1, diameter: rollerRadiusM * 2, tessellation: 8 },
+          scene,
+        );
+        roller.rotation.z = Math.PI / 2;
+        roller.position.set(
+          side * (trackCentreX + trackWidthM * 0.5 + 0.02),
+          trackHeightM - rollerRadiusM,
+          -trackSpan / 2 + trackSpan * f,
+        );
+        roller.material = makeMaterial(scene, `tank-roller-mat-${side}-${i}`, palette.wheel.scale(0.9));
+        roller.parent = this.root;
+      }
+
+      // Track links along the outer face.
+      //
+      // The single most effective addition to the running gear. Without them the track is a smooth dark
+      // slab, and at range the eye reads a *skirt*; a repeated link pattern is what reads as a track.
+      // One mesh with all the links baked into it rather than one mesh per link, so a full vehicle adds
+      // two draw calls rather than thirty.
+      const linkCount = TANK_DETAIL.trackLinkCount;
+      const linkHeightM = trackHeightM * TANK_DETAIL.trackLinkHeightFraction;
+      const linkSpacing = trackSpan / linkCount;
+      const linkBoxes: number[] = [];
+      for (let i = 0; i < linkCount; i += 1) {
+        const z = -trackSpan / 2 + linkSpacing * (i + 0.5);
+        // Push alternating links slightly further out, giving the track a visible rhythm rather than a
+        // perfectly flat banded strip.
+        const out = TANK_DETAIL.trackLinkDepthM * (i % 2 === 0 ? 1 : 0.55);
+        linkBoxes.push(
+          side * (trackCentreX + trackWidthM * 0.5 + out),
+          trackHeightM * 0.5,
+          z,
+          TANK_DETAIL.trackLinkDepthM,
+          linkHeightM,
+          linkSpacing * 0.72,
+        );
+      }
+      const links = MeshBuilder.CreateBox(
+        `tank-links-${side}`,
+        { width: 1, height: 1, depth: 1 },
+        scene,
+      );
+      applyBoxInstances(links, linkBoxes);
+      links.material = makeMaterial(scene, `tank-links-mat-${side}`, palette.track.scale(1.5));
+      links.parent = this.root;
+
+      // Fender over the top of the track: catches light along the vehicle's top edge and breaks the
+      // long unbroken flank.
       const fender = MeshBuilder.CreateBox(
         `tank-fender-${side}`,
         {
-          width: widthM * TANK_PROPORTIONS.trackWidthFraction + widthM * TANK_PROPORTIONS.fenderOverhangFraction,
-          height: hullHeightM * TANK_PROPORTIONS.fenderThicknessFraction,
-          depth: lengthM * TANK_PROPORTIONS.trackLengthFraction,
+          width: trackWidthM + widthM * TANK_DETAIL.fenderOverhangFraction * 2,
+          height: trackHeightM * TANK_DETAIL.fenderThicknessFraction,
+          depth: trackSpan * 0.98,
         },
         scene,
       );
-      fender.position.set(
-        side * widthM * (0.5 - TANK_PROPORTIONS.trackWidthFraction / 2),
-        trackHeightM + (hullHeightM * TANK_PROPORTIONS.fenderThicknessFraction) / 2,
-        0,
-      );
-      fender.material = makeMaterial(scene, `tank-fender-mat-${side}`, TANK_COLORS.fender);
+      fender.position.set(side * trackCentreX, trackHeightM + 0.02, 0);
+      fender.material = makeMaterial(scene, `tank-fender-mat-${side}`, palette.fender);
       fender.parent = this.root;
     }
 
-    // Turret block on its own node, so it can rotate independently of the hull. This is the visual
-    // counterpart of the core's separation between hull heading and turret local angle: the mesh
-    // hierarchy mirrors the simulation's, which is why the two can never disagree.
-    const turretHeightM = TANK_PROPORTIONS.turretHeightFraction * heightM;
+    // --- Turret -------------------------------------------------------------------------
+    // Ring collar between hull and turret: reads as the turret sitting *on* the hull rather than
+    // intersecting it.
+    const ringRadiusM = widthM * TANK_DETAIL.turretRingRadiusFraction;
+    const ring = MeshBuilder.CreateCylinder(
+      'tank-turret-ring',
+      { height: hullHeightM * 0.16, diameter: ringRadiusM * 2, tessellation: 16 },
+      scene,
+    );
+    ring.position.y = roofHeightM - hullHeightM * 0.06;
+    ring.material = makeMaterial(scene, 'tank-ring-mat', palette.track.scale(1.2));
+    ring.parent = this.root;
 
-    // Turret ring.
-    //
-    // Positioned at the **hull roof**, not at `definition.turret.ringHeightM`. That data field is the
-    // height of the gun trunnion in the simulation — 1.42 m for this vehicle — while the hull roof
-    // stands at 1.77 m, because the hull body sits on top of the tracks. Placing the turret at the
-    // ring height therefore buried the lower half of it inside the hull, which is why the vehicle read
-    // as a flat slab with a box sunk into it rather than as a hull with a turret on top.
-    //
-    // The simulated muzzle is unaffected: it comes from the core's own geometry, not from this node.
-    const hullRoofM = trackHeightM + hullHeightM;
     this.turretNode = new TransformNode('tank-turret-node', scene);
-    this.turretNode.position.y = hullRoofM;
+    this.turretNode.position.y = roofHeightM;
     this.turretNode.parent = this.root;
 
-    // Turret set back from the hull centre so the barrel projects forward of the nose instead of
-    // being swallowed by the turret block. At the original centre offset the gun was invisible from
-    // every angle, which left the vehicle looking like an armoured box with no weapon.
-    const turretOffsetZ = -lengthM * TANK_PROPORTIONS.turretRearwardOffsetFraction;
+    const turretHeightM = TANK_PROPORTIONS.turretHeightFraction * heightM * spec.turretHeightScale;
+    const turretLengthM = definition.dimensions.lengthM * TANK_PROPORTIONS.turretLengthFraction * spec.turretLengthScale;
+    const turretWidthM = widthM * TANK_PROPORTIONS.turretWidthFraction;
+    // Sit the turret back from the hull centre so the gun has room to extend past the nose.
+    const turretOffsetZ = -definition.dimensions.lengthM * TANK_PROPORTIONS.turretRearwardOffsetFraction;
 
-    const turret = MeshBuilder.CreateBox(
+    // Faceted, tapered turret rather than a box: `tessellation` gives the polygon count and the taper
+    // narrows it toward the roof, so it reads as a cast turret with a distinct top outline. The variant
+    // changes both, which is what makes the two vehicles' silhouettes differ.
+    const turret = MeshBuilder.CreateCylinder(
       'tank-turret',
       {
-        width: widthM * TANK_PROPORTIONS.turretWidthFraction,
         height: turretHeightM,
-        depth: lengthM * TANK_PROPORTIONS.turretLengthFraction,
+        diameterTop: turretWidthM * spec.turretTaper,
+        diameterBottom: turretWidthM,
+        tessellation: spec.turretFacets,
       },
       scene,
     );
+    turret.scaling.z = turretLengthM / turretWidthM;
     turret.position.set(0, turretHeightM / 2, turretOffsetZ);
+    turret.rotation.y = Math.PI / spec.turretFacets;
     turret.material = makeMaterial(scene, 'tank-turret-mat', turretColor);
     turret.parent = this.turretNode;
 
-    // The barrel gets its own pivot node, so elevation is a rotation about the trunnion rather than
-    // a repositioning of the mesh. The pivot sits partway up the turret face, where a real gun
-    // trunnion is, so the barrel emerges from the turret rather than from its roof.
+    // Rear bustle: a box overhanging the back of the turret. This overhang is a strong recognition cue
+    // and, more practically, it makes the turret's *facing* obvious from behind \u2014 the player can see
+    // which way their own gun points without checking the HUD.
+    const bustle = MeshBuilder.CreateBox(
+      'tank-bustle',
+      {
+        width: turretWidthM * 0.82,
+        height: turretHeightM * 0.62,
+        depth: spec.bustleLengthM,
+      },
+      scene,
+    );
+    bustle.position.set(
+      0,
+      turretHeightM * 0.42,
+      turretOffsetZ - turretLengthM * 0.5 - spec.bustleLengthM * 0.5,
+    );
+    bustle.material = makeMaterial(scene, 'tank-bustle-mat', turretColor.scale(0.92));
+    bustle.parent = this.turretNode;
+
+    // --- Gun ---------------------------------------------------------------------------
+    // The barrel gets its own pivot node, so elevation is a rotation about the trunnion rather than a
+    // repositioning of the mesh. The pivot sits partway up the turret face, where a real gun trunnion
+    // is, so the barrel emerges from the turret rather than from its roof.
     this.barrelNode = new TransformNode('tank-barrel-node', scene);
     this.barrelNode.position.set(0, turretHeightM * 0.55, turretOffsetZ);
     this.barrelNode.parent = this.turretNode;
 
+    const barrelLengthM = definition.mainGun.barrelLengthM;
+    const barrelRadiusM = TANK_PROPORTIONS.barrelRadiusM;
+
     this.barrel = MeshBuilder.CreateCylinder(
       'tank-barrel',
+      { height: barrelLengthM, diameter: barrelRadiusM * 2, tessellation: 12 },
+      scene,
+    );
+    // Cylinders are built along Y in Babylon; lay it along +Z so it points forward, and offset by half
+    // its length so the pivot is at the trunnion rather than at the barrel's midpoint.
+    this.barrel.rotation.x = Math.PI / 2;
+    this.barrel.position.z = barrelLengthM / 2;
+    this.barrel.material = makeMaterial(scene, 'tank-barrel-mat', palette.barrel);
+    this.barrel.parent = this.barrelNode;
+
+    // Mantlet: the collar where the barrel meets the turret. Without it the barrel appears to sprout
+    // from a flat face, which is the detail that most makes a model read as assembled rather than
+    // designed.
+    const mantlet = MeshBuilder.CreateCylinder(
+      'tank-mantlet',
       {
-        height: definition.mainGun.barrelLengthM,
-        diameter: TANK_PROPORTIONS.barrelRadiusM * 2,
+        height: barrelLengthM * TANK_DETAIL.mantletLengthFraction,
+        diameter: barrelRadiusM * 2 * TANK_DETAIL.mantletRadiusScale,
         tessellation: 12,
       },
       scene,
     );
-    // Cylinders are built along Y in Babylon; lay it along +Z so it points forward, and offset it by
-    // half its length so the pivot is at the trunnion rather than the barrel's midpoint.
-    this.barrel.rotation.x = Math.PI / 2;
-    this.barrel.position.z = definition.mainGun.barrelLengthM / 2;
-    this.barrel.material = makeMaterial(scene, 'tank-barrel-mat', TANK_COLORS.barrel);
-    this.barrel.parent = this.barrelNode;
+    mantlet.rotation.x = Math.PI / 2;
+    mantlet.position.z = barrelLengthM * TANK_DETAIL.mantletLengthFraction * 0.5;
+    mantlet.material = makeMaterial(scene, 'tank-mantlet-mat', palette.turret.scale(0.95));
+    mantlet.parent = this.barrelNode;
 
-    // Muzzle swell at the tip. Purely visual: it makes the gun read as a gun at range, where a plain
-    // cylinder of even thickness is indistinguishable from a pole.
+    // Muzzle brake: the swollen tip that ends the gun. Purely visual, but it stops a 4.2 m barrel
+    // reading as an even-ended pole and gives the eye something to track when watching where the gun
+    // points.
+    const brakeLengthM = barrelLengthM * TANK_DETAIL.muzzleBrakeLengthFraction;
     const muzzle = MeshBuilder.CreateCylinder(
       'tank-muzzle',
       {
-        height: TANK_PROPORTIONS.barrelRadiusM * 2.4,
-        diameter: TANK_PROPORTIONS.barrelRadiusM * 2 * TANK_PROPORTIONS.muzzleRadiusFraction,
+        height: brakeLengthM,
+        diameter: barrelRadiusM * 2 * TANK_DETAIL.muzzleBrakeRadiusScale,
         tessellation: 12,
       },
       scene,
     );
     muzzle.rotation.x = Math.PI / 2;
-    muzzle.position.z = definition.mainGun.barrelLengthM - TANK_PROPORTIONS.barrelRadiusM * 1.2;
-    muzzle.material = makeMaterial(scene, 'tank-muzzle-mat', TANK_COLORS.barrel);
+    muzzle.position.z = barrelLengthM - brakeLengthM / 2;
+    muzzle.material = makeMaterial(scene, 'tank-muzzle-mat', palette.barrel);
     muzzle.parent = this.barrelNode;
   }
 
@@ -326,6 +552,87 @@ export class TankVisual {
 
 /** Re-exported so callers can reach the tuning without a second import. */
 export { TANK_PROPORTIONS };
+
+/**
+ * Fraction of the hull's height occupied by the sloped upper glacis.
+ *
+ * The remainder is the vertical lower plate. Roughly 60/40 is what produces the two-part profile that
+ * reads as a tank: a near-vertical face at the nose with a distinct slope above it.
+ */
+const GLACIS_HEIGHT_FRACTION = 0.6;
+
+/** Lower plate width as a fraction of the hull body's width. Narrower, so it tucks under the glacis. */
+const LOWER_PLATE_WIDTH_FRACTION = 0.86;
+
+/** Lower plate depth as a fraction of hull length. Short, so it affects only the nose profile. */
+const LOWER_PLATE_DEPTH_FRACTION = 0.1;
+
+/**
+ * Bakes a set of boxes into one mesh.
+ *
+ * Used for the track links, where the alternative is one `CreateBox` call per link per side: 28 extra
+ * meshes per vehicle, each with its own transform to update and its own draw call. Writing the vertices
+ * directly produces a single mesh with the same result, which is the difference between a vehicle that
+ * costs a handful of draw calls and one that costs sixty.
+ *
+ * @param boxes flat `[x, y, z, width, height, depth]` per box, six numbers each
+ */
+function applyBoxInstances(mesh: Mesh, boxes: readonly number[]): void {
+  const count = boxes.length / 6;
+  const positions = new Float32Array(count * 24 * 3);
+  const indices = new Uint32Array(count * 36);
+  let vertex = 0;
+  let element = 0;
+
+  for (let b = 0; b < count; b += 1) {
+    const cx = boxes[b * 6]!;
+    const cy = boxes[b * 6 + 1]!;
+    const cz = boxes[b * 6 + 2]!;
+    const hw = boxes[b * 6 + 3]! / 2;
+    const hh = boxes[b * 6 + 4]! / 2;
+    const hd = boxes[b * 6 + 5]! / 2;
+
+    // Eight corners, in the same order the indices below expect.
+    const corners: readonly (readonly [number, number, number])[] = [
+      [-hw, -hh, -hd], [hw, -hh, -hd], [hw, hh, -hd], [-hw, hh, -hd],
+      [-hw, -hh, hd], [hw, -hh, hd], [hw, hh, hd], [-hw, hh, hd],
+    ];
+    for (const [dx, dy, dz] of corners) {
+      positions[vertex * 3] = cx + dx;
+      positions[vertex * 3 + 1] = cy + dy;
+      positions[vertex * 3 + 2] = cz + dz;
+      vertex += 1;
+    }
+
+    // Twelve triangles per box, wound so every face points outward. Written as a fixed list rather than
+    // generated, because a generated winding is exactly the kind of thing that silently produces an
+    // inside-out mesh that still "works" and merely looks wrong.
+    const faces = [
+      0, 2, 1, 0, 3, 2, // -Z
+      4, 5, 6, 4, 6, 7, // +Z
+      3, 7, 6, 3, 6, 2, // +Y
+      0, 1, 5, 0, 5, 4, // -Y
+      0, 4, 7, 0, 7, 3, // -X
+      1, 2, 6, 1, 6, 5, // +X
+    ];
+    const base = b * 8;
+    for (const corner of faces) {
+      indices[element] = base + corner;
+      element += 1;
+    }
+  }
+
+  const vertexData = new VertexData();
+  vertexData.positions = positions as unknown as number[];
+  vertexData.indices = indices as unknown as number[];
+  vertexData.normals = [];
+  VertexData.ComputeNormals(
+    positions as unknown as number[],
+    indices as unknown as number[],
+    vertexData.normals,
+  );
+  vertexData.applyToMesh(mesh, false);
+}
 
 /** Dimensions for the hull wedge. */
 interface GlacisDimensions {
