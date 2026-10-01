@@ -83,9 +83,25 @@ const TICKS_PER_SECOND = 60;
 
 
 /** Second-denominated tactical values, kept separate so the planner reads as a policy table. */
-const TACTIC_TUNING = {
-  /** Range band the opponent tries to fight in, metres. Inherited from V4 and measured, not guessed. */
-  nearRangeM: 32,
+export const TACTIC_TUNING = {
+  /**
+   * Range band the opponent tries to fight in, metres. Inherited from V4 and measured, not guessed.
+   *
+   * The near edge must sit **at or inside** `ENEMY_TUNING.minEngageRangeM`, and that relationship is
+   * load-bearing rather than incidental. Measured during V5 development with the near edge at 32 m
+   * while the gun could fire from 24 m: the opponent retreated to 32 m, could not fire from there, and
+   * then flapped between `flank` and `adjust-range` for the rest of the fight, alternating every few
+   * seconds without ever taking a shot. Two rules disagreed about the same distance, and the interval
+   * between them - 24 m to 32 m - was a band in which the opponent was perfectly able to shoot and had
+   * decided not to. Sizing this from the gun's actual capability rather than from a separate guess is
+   * what removes that dead zone.
+   *
+   * Equal to the gun's minimum rather than below it: the band is where the opponent wants to be, and
+   * the gun's limit is how close it may be pushed. Retreating to exactly the gun's minimum puts the
+   * opponent on the boundary, which is where it can immediately shoot again - a metre further out and it
+   * is managing range instead of fighting. A test asserts the two cannot drift apart.
+   */
+  nearRangeM: 24,
   farRangeM: 90,
   /** Grace period before the first shot after acquiring the player, seconds. */
   acquisitionDelaySeconds: 1.5,
@@ -270,7 +286,23 @@ export function chooseIntent(situation: Situation, memory: EngagementMemory): In
 
 
   // --- Range first: a bad angle at the wrong range is still a bad shot -------------------------------
-  if (situation.rangeM > TACTIC_TUNING.farRangeM || situation.rangeM < TACTIC_TUNING.nearRangeM) {
+  //
+  // The one exception is an **in-progress flank**. A flank exists to reach a position at a better
+  // angle, and it deliberately drives through ranges that are not the band it wants to fight in - that
+  // is the whole point of going around. Cancelling it here meant the opponent could never complete one.
+  //
+  // Measured during V5 development: the opponent committed to a flank at 26 m, this check cancelled it
+  // on the very next tick, `adjust-range` reversed instead, and the result was a permanent flap between
+  // `flank` and `adjust-range` for the remaining thirty seconds of the fight. The flank destination sat
+  // a steady 78 m away and the tank never moved toward it, because it was never allowed to. It looked
+  // like an unreachable destination; it was really a commitment being cancelled every tick.
+  //
+  // A charging player is the case this check was written for, and it still applies: a flank that
+  // *starts* inside the band is allowed to finish, but a flank is not *begun* inside the band, because
+  // the check below runs before the flank is ever chosen.
+  const outOfBand =
+    situation.rangeM > TACTIC_TUNING.farRangeM || situation.rangeM < TACTIC_TUNING.nearRangeM;
+  if (outOfBand && memory.flankSide === 0) {
     // Out of the band. Fix the range before worrying about the angle: closing from 120 m at a mediocre
     // aspect beats standing at 120 m at a perfect one.
     //

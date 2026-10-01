@@ -407,6 +407,16 @@ export function steerToward(
   // Reverse out of a situation rather than continuing to push into it. Committed to when the hull is
   // facing substantially away from the destination *and* the way forward is blocked, which is the
   // nosed-into-a-mound case; backing up is what lets such a tank recover.
+  const reverse = blocked && Math.abs(errorDeg) > 110;
+  const throttle = reverse ? -throttleAuthority * 0.7 : throttleAuthority;
+
+  return {
+    turn,
+    throttle,
+    steeringTarget: pointFromBearing(from, targetBearing, NAVIGATION_TUNING.lookaheadM),
+    avoiding,
+  };
+}
 
 /**
  * Steepest climb along a bearing from a point, out to `distanceM`, degrees.
@@ -493,13 +503,51 @@ function bearingTo(from: Vec3, to: Vec3): number {
   return atan2(to.x - from.x, to.z - from.z);
 }
 
-  const reverse = blocked && Math.abs(errorDeg) > 110;
-  const throttle = reverse ? -throttleAuthority * 0.7 : throttleAuthority;
+/**
+ * How far off the threat bearing the hull may drift before reversing stops correcting it, degrees.
+ *
+ * Beyond this the threat is behind the tank, and steering to bring it round while reversing in
+ * reverse gear would walk the hull in a circle. The tank holds its line instead and lets the range
+ * do the work.
+ */
+const REVERSE_HULL_CORRECTION_LIMIT_DEG = 60;
 
-  return {
-    turn,
-    throttle,
-    steeringTarget: pointFromBearing(from, targetBearing, NAVIGATION_TUNING.lookaheadM),
-    avoiding,
-  };
+/**
+ * Backs away from a threat while keeping the hull pointed at it.
+ *
+ * ## Why this is not `steerToward` with a negative throttle
+ *
+ * `steerToward` drives the hull *toward* its destination. Asked to retreat, that means turning the
+ * hull through 180 degrees and driving away with the tank's back to the enemy, which throws away the
+ * facing that made the position worth holding and spends the entire hull traverse rate doing it.
+ * Measured during V5 development against a parked player: the opponent stood still for 120 ticks at
+ * 20 m while its hull swung round, and the gun, which slews relative to the hull, had to follow the
+ * hull *and* the target at once. It lost the engagement entirely and drove out of the arena.
+ *
+ * Reversing moves the tank along its existing heading, so two things hold at once: the range opens at
+ * the vehicle's reverse speed, and the hull never leaves the target, leaving the turret's whole
+ * 24 deg/s available for tracking. A tank that is too close backs up; it does not spin and flee.
+ *
+ * The turn demand still corrects the heading, but only far enough to keep the threat in the forward
+ * arc. Correcting in reverse is slow and imprecise, and that is the honest outcome: the alternative
+ * is a faster retreat that ends with the opponent facing away and unable to shoot at all.
+ */
+export function reverseFrom(
+  from: Vec3,
+  headingRad: number,
+  threat: Vec3,
+  reverseAuthority: number,
+  turnAuthority: number,
+): { throttle: number; turn: number } {
+  const desiredBearing = bearingTo(from, threat);
+  // Wrapped, so a threat that has crossed the nose produces a small correction rather than a full
+  // turn: the goal is to keep it in the forward arc, not to chase it round to the stern.
+  const errorDeg = radToDeg(wrapAngle(desiredBearing - headingRad));
+
+  const turn =
+    Math.abs(errorDeg) > REVERSE_HULL_CORRECTION_LIMIT_DEG
+      ? 0
+      : -errorDeg * turnAuthority;
+
+  return { throttle: -reverseAuthority, turn };
 }

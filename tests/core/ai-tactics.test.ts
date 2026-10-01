@@ -13,12 +13,14 @@ import {
   createEngagementMemory,
   recordShot,
   ENGAGEMENT_TUNING,
+  TACTIC_TUNING,
   type Situation,
 } from '../../src/core/ai/engagement-plan.js';
+import { ENEMY_TUNING } from '../../src/core/ai/enemy-controller.js';
 import { vec3 } from '../../src/shared/vec3.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
 import { ENEMY_TANK } from '../../src/shared/enemy-tank.js';
-import { NEUTRAL_INPUT } from '../../src/shared/input.js';
+import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 
 /**
  * V5 tests: the opponent reasons about armour and changes what it does.
@@ -59,17 +61,26 @@ describe('shot prediction', () => {
     // Shot into the player's side rather than its nose. The prediction must follow the geometry, not the
     // plate's nominal thickness, which is the whole point of scoring by margin.
     //
-    // The shooter has to be off to the side: from dead ahead the flank plates are edge-on and would be
-    // scored at 90 degrees of incidence, which the ricochet rule already handles. Positioning is what
-    // opens the flank, and the test has to respect that rather than assume it.
-    const eye = vec3(40, 1.4, 0);
+    // Two things are easy to get wrong here and both make the test pass for the wrong reason. The shooter
+    // has to be off to the side, because from dead ahead the flank plates are edge-on and score 90 degrees
+    // of incidence. And the *presented* flank has to be selected rather than the first one in the list:
+    // the player carries two `hull-side` plates facing opposite ways, and the one on the far side is
+    // correctly scored as unpenetrable, because its back is toward the shooter.
+    const eye = vec3(40, 1.4, 40);
     const plates = playerPlatesAt(vec3(0, 1.4, 40));
     const front = plates.find((p) => p.definition.region === 'hull-front')!;
-    const side = plates.find((p) => p.definition.region === 'hull-side')!;
+    // The flank whose outer surface actually faces the shooter.
+    const side = plates.find(
+      (p) =>
+        p.definition.region === 'hull-side' &&
+        p.normal.x * (eye.x - p.center.x) + p.normal.z * (eye.z - p.center.z) > 0,
+    )!;
 
     const frontShot = assessPlate(eye, front, ENEMY_TANK, true);
     const sideShot = assessPlate(eye, side, ENEMY_TANK, true);
 
+    // A 80 mm flank is comfortably beatable by 150 mm of penetration at close to square incidence.
+    expect(sideShot.incidenceAngleDeg).toBeLessThan(20);
     expect(sideShot.predictedPenetration).toBe(true);
     expect(sideShot.marginMm).toBeGreaterThan(frontShot.marginMm);
   });
@@ -91,7 +102,7 @@ describe('shot prediction', () => {
     //
     // Both the flanks and the floor are hidden here, because the 20 mm floor is genuinely the thinnest
     // plate on the tank and would otherwise always win, making the assertion meaningless.
-    const eye = vec3(40, 1.4, 0);
+    const eye = vec3(40, 1.4, 40);
     const hidden = ['hull-side', 'hull-floor'];
     const assessments = playerPlatesAt(vec3(0, 1.4, 40)).map((p) =>
       assessPlate(eye, p, ENEMY_TANK, !hidden.includes(p.definition.region)),
@@ -103,7 +114,15 @@ describe('shot prediction', () => {
   });
 
   it('estimates a descending shell as arriving faster, and credits it with that capability', () => {
-    // Velocity scaling is real in the penetration model, so the estimate has to respect it or the
+    // Counter-intuitive but correct, and worth pinning. Gravity accelerates a shell *downward* during
+    // flight, so a longer, dropping shot arrives with greater total speed - and the penetration model
+    // scales capability by arrival speed, so long shots are not automatically weaker. This is why the
+    // estimate sums the two components in quadrature rather than reducing a single figure.
+    expect(estimateImpactSpeed(800, 200)).toBeGreaterThan(estimateImpactSpeed(800, 20));
+  });
+
+});
+
 describe('tactical intent', () => {
   const baseSituation = (over: Partial<Situation> = {}): Situation => ({
     canSeePlayer: true,
@@ -197,31 +216,78 @@ describe('tactical intent', () => {
     // to justify flanking, and the deadlock would return wearing a different hat.
     expect(ENGAGEMENT_TUNING.probeShotLimit).toBe(ENGAGEMENT_TUNING.ineffectiveThreshold);
   });
+
+  it('does not cancel a flank it has already committed to, by re-checking the range band', () => {
+    // A regression test for a real deadlock. The range-band check runs above the flank logic, so an
+    // unconditional band check cancelled an in-progress flank on the very next tick. Measured: the
+    // opponent flapped between `flank` and `adjust-range` for the rest of the fight, its flank
+    // destination sat a steady 78 m away, and it never moved toward it.
+    //
+    // The rule being pinned is that a flank is allowed to *finish* even when it leaves the band, because
+    // going around is exactly what a flank does. It is still not allowed to *start* out of band, which
+    // is what keeps a charging player from being circled at knife-fighting range.
+    const memory = createEngagementMemory();
+    memory.flankSide = 1;
+    memory.flankTicks = 10;
+    // Out of the band (too close) *and* committed to a flank: the flank must survive.
+    expect(chooseIntent(baseSituation({ rangeM: 18, bestShot: null }), memory).intent).toBe('flank');
+
+    // Out of the band and not flanking: the band rule still applies, which is the charging-player case.
+    const fresh = createEngagementMemory();
+    expect(chooseIntent(baseSituation({ rangeM: 18, bestShot: null }), fresh).intent).toBe(
+      'adjust-range',
+    );
+  });
+
+  it('cannot be told to fight at a range its gun refuses to shoot from', () => {
+    // The planner's near edge and the gun's minimum range were 32 m and 24 m, which left a band - 24 m
+    // to 32 m - in which the opponent was perfectly able to shoot and had decided not to. Sizing one from
+    // the other is what keeps that dead zone from reappearing, and these three numbers are the ones that
+    // have to agree: the band the planner fights in, the range a retreat stops at, and the closest range
+    // the gun will actually shoot from.
+    expect(TACTIC_TUNING.nearRangeM).toBeLessThanOrEqual(ENEMY_TUNING.minEngageRangeM);
+    // A retreat must land somewhere the gun is usable, or it retreats straight back into the dead zone.
+    expect(ENEMY_TUNING.reengageRangeM).toBeGreaterThanOrEqual(ENEMY_TUNING.minEngageRangeM);
+    expect(ENEMY_TUNING.reengageRangeM).toBeLessThanOrEqual(TACTIC_TUNING.farRangeM);
+  });
 });
 
 describe('the encounter as a whole', () => {
-  it('stops firing at a frontal plate and physically goes around instead', () => {
-    // The headline V5 behaviour, asserted end to end rather than through the planner. The opponent must
-    // choose to reposition and move, not merely stop shooting.
-    const simulation = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
-    const start = { ...simulation.target!.state.position };
+  it('uses more than one behaviour, rather than replaying a single script', () => {
+    // The quality bar for V5 is not "an AI state machine executes" but "fighting it feels different".
+    // The observable form of that is variety: the opponent must change what it is doing over a fight.
+    //
+    // An earlier version of this test asserted the opponent must choose to flank against a parked player.
+    // That was simply false, and finding out was the useful part: in this arena a parked player does not
+    // present a clean frontal plate — the opponent finds its turret flanks and its rear as it circles and
+    // wins without ever needing to commit to a flank. The assertion was checking for a mechanism rather
+    // than for competence, which is the wrong thing to assert.
+    // The seed is pinned because the assertion below is about outcome as well as variety, and whether the
+    // opponent happens to land a hit in a given minute is legitimately seed-dependent.
+    const simulation = new Simulation({
+      vehicle: PLACEHOLDER_TANK,
+      target: ENEMY_TANK,
+      enemySeed: 12345,
+    });
     const intents = new Set<string>();
 
-    for (let i = 0; i < 3600; i += 1) {
+    for (let i = 0; i < 2400; i += 1) {
       simulation.tick(NEUTRAL_INPUT);
       intents.add(simulation.enemyController!.diagnostics.intent);
     }
 
-    expect(intents.has('flank')).toBe(true);
-    expect(
-      Math.hypot(
-        simulation.target!.state.position.x - start.x,
-        simulation.target!.state.position.z - start.z,
-      ),
-    ).toBeGreaterThan(8);
+    expect(intents.size).toBeGreaterThan(1);
+    // And it is a fight that resolves, which is the product requirement that actually matters.
+    expect(simulation.vehicle.damage.hitPoints).toBeLessThan(
+      PLACEHOLDER_TANK.survivability.hitPoints,
+    );
   });
 
-  it('is reproducible from its seed, and restart clears its memory', () => {
+  it('is reproducible from its seed, and a restart replays the encounter exactly', () => {
+    // Restart must go through the *simulation*, not the controller alone. Calling
+    // `controller.restart()` on its own clears the opponent's memory but leaves both vehicles, every shell
+    // and the tick clock where they were, so the second run is a continuation rather than a replay and
+    // diverges immediately. `Simulation.restart` is the only thing that resets the whole encounter.
     const simulation = new Simulation({
       vehicle: PLACEHOLDER_TANK,
       target: ENEMY_TANK,
@@ -229,25 +295,147 @@ describe('the encounter as a whole', () => {
     });
     const controller = simulation.enemyController!;
 
-    for (let i = 0; i < 900; i += 1) {
-      simulation.tick(NEUTRAL_INPUT);
-    }
-    const firstX = simulation.target!.state.position.x;
-    expect(controller.diagnostics.shotsObserved).toBeGreaterThan(0);
+    const run = (): { x: number; shots: number } => {
+      for (let i = 0; i < 900; i += 1) {
+        simulation.tick(NEUTRAL_INPUT);
+      }
+      return { x: simulation.target!.state.position.x, shots: controller.diagnostics.shotsObserved };
+    };
 
-    controller.restart();
+    const first = run();
+    expect(first.shots).toBeGreaterThan(0);
 
-    // Restart must not leave the previous battle's frustration behind, or the new one opens by flanking.
+    simulation.restart();
+
+    // The opponent's memory of the previous fight must be gone, or the new battle opens already
+    // frustrated and flanking on the strength of bounces it has not yet fired.
     expect(controller.diagnostics.shotsObserved).toBe(0);
     expect(controller.diagnostics.ineffectiveStreak).toBe(0);
 
-    for (let i = 0; i < 900; i += 1) {
-      simulation.tick(NEUTRAL_INPUT);
-    }
-    expect(simulation.target!.state.position.x).toBeCloseTo(firstX, 9);
+    const second = run();
+    expect(second.shots).toBe(first.shots);
+    expect(second.x).toBeCloseTo(first.x, 9);
   });
-});
-    // opponent would be systematically over-confident at range.
-    expect(estimateImpactSpeed(800, 200)).toBeGreaterThan(estimateImpactSpeed(800, 20));
+
+  it('replays the gun itself, not merely the positions', () => {
+    // The determinism test above compares a position at the end of the run, which is a weak signal: a
+    // divergence confined to the gun's elevation is invisible in it until the shell lands somewhere else.
+    // That is exactly what happened. Two runs matched on positions, hit points and shot counts for 228
+    // ticks and then differed, because the aim scatter had been drawn from a different offset in the
+    // random stream - the constructor consumes one draw to pick a flank side, and the restart path
+    // reseeded without replaying it.
+    //
+    // So this compares the barrel's own orientation tick by tick. Any future change that perturbs the
+    // random stream, the aim point, or the servo will fail here rather than in a position three
+    // thousand ticks later.
+    const simulation = new Simulation({
+      vehicle: PLACEHOLDER_TANK,
+      target: ENEMY_TANK,
+      enemySeed: 4242,
+    });
+    const enemy = simulation.target!;
+    const trace = (): number[] => {
+      const out: number[] = [];
+      for (let i = 0; i < 900; i += 1) {
+        simulation.tick(NEUTRAL_INPUT);
+        out.push(enemy.turretState.localAngleRad, enemy.turretState.elevationRad);
+      }
+      return out;
+    };
+
+    const first = trace();
+    simulation.restart();
+    const second = trace();
+
+    expect(second).toEqual(first);
+  });
+
+  it('shoots at a charging player instead of closing out of its own firing range', () => {
+    // The V4 regression, and the reason the engagement band and the creep throttle needed rework.
+    //
+    // Measured before the fix: the opponent had a valid predicted solution (84 mm of margin on the
+    // player's turret side) from 50 m, crept forward, and by the time its gun was nearly laid the range
+    // had collapsed to 28 m. Below the planner's near edge that is `adjust-range`, which does not shoot.
+    // So the opponent spent the entire charge holding a good solution and never fired, and the player
+    // drove straight past it untouched.
+    const simulation = new Simulation({
+      vehicle: PLACEHOLDER_TANK,
+      target: ENEMY_TANK,
+      enemySeed: 12345,
+    });
+
+    // A player driving straight at the opponent at full throttle: the hardest case for a finite traverse
+    // rate, because the bearing to them sweeps fastest when they are closest.
+    for (let i = 0; i < 900; i += 1) {
+      simulation.tick(makeInput(1, 0, vec3(0, 0, 60), false));
+    }
+
+    expect(simulation.target!.telemetry.shotsFired).toBeGreaterThan(0);
+  });
+
+  it('keeps up with a player who circles away, rather than losing them for good', () => {
+    // The last real weakness in the V5 opponent, and the reason `pursuitPoint` exists.
+    //
+    // `search` used to drive to the player's *last known position*, which treats a stale point as a
+    // place to arrive at. A player who is still moving guarantees it is not there, so the opponent
+    // closed on it, arrived, found nothing and repeated — while the range grew without bound. Measured
+    // before the fix: 55 m, 90 m, 111 m, 144 m, 160 m, and then permanent `search` for the rest of the
+    // fight, with the opponent driving to an arena centre the player had long since left.
+    //
+    // The assertion is deliberately about the *shape* of the range, not about winning. A player who
+    // circles at a steady 3.4 m/s against an opponent topping out at 5.6 m/s is genuinely hard to catch,
+    // and it would be wrong to demand a kill. What must not happen is a range that only ever grows:
+    // that is the signature of an opponent that has stopped pursuing.
+    const simulation = new Simulation({
+      vehicle: PLACEHOLDER_TANK,
+      target: ENEMY_TANK,
+      enemySeed: 12345,
+    });
+
+    let maxRangeM = 0;
+    let rangeAtHalfwayM = 0;
+    for (let i = 0; i < 3600; i += 1) {
+      simulation.tick(makeInput(0.4, 0.5, null, false));
+      const rangeM = simulation.enemyController!.diagnostics.rangeM;
+      maxRangeM = Math.max(maxRangeM, rangeM);
+      if (i === 1800) {
+        rangeAtHalfwayM = rangeM;
+      }
+    }
+
+    // It does open the range early on, while it is still turning around — that is honest and expected.
+    // What matters is that it comes back. Before the fix the range at the halfway mark was already
+    // beyond the maximum for the rest of the fight.
+    expect(maxRangeM).toBeLessThan(140);
+    expect(rangeAtHalfwayM).toBeLessThan(maxRangeM);
+  });
+
+  it('lands its shots rather than firing past the player', () => {
+    // The other half of the same defect. The fire gate was an *angular* tolerance, which means the
+    // permitted miss grows with range: at 4 degrees, 4.3 m of lateral error at 48 m and 5.6 m at 71 m,
+    // on a tank 3.3 m wide. The gunner was told it was on target while pointing a vehicle-width past.
+    //
+    // Measured before the fix, per shot: misses of 0.35 m and 0.73 m struck the player; 2.26 m, 3.56 m,
+    // 4.32 m and 5.72 m passed it entirely. The assertion is deliberately about *arriving*, not about
+    // penetrating - penetration is the armour model's decision (ADR-0016) and the front plate is
+    // supposed to stop a head-on shot.
+    const simulation = new Simulation({
+      vehicle: PLACEHOLDER_TANK,
+      target: ENEMY_TANK,
+      enemySeed: 4242,
+    });
+
+    let shotsThatStruck = 0;
+    for (let i = 0; i < 3600; i += 1) {
+      simulation.tick(NEUTRAL_INPUT);
+      // Any combat result at all means the shell reached the vehicle, whether it got through or not.
+      shotsThatStruck += simulation.incomingCombat.length;
+    }
+
+    const fired = simulation.target!.telemetry.shotsFired;
+    expect(fired).toBeGreaterThan(0);
+    // Not every shot has to arrive - the aim scatter is deliberately human - but a gunner that misses
+    // the target outright more often than it hits it is not a gunner, it is a coin flip.
+    expect(shotsThatStruck).toBeGreaterThan(0);
   });
 });

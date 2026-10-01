@@ -412,6 +412,9 @@ decision) and OD-08 (no AI framework, by design).
 
 ## V5 — Autonomous AI Opponents
 
+**Status: complete.** See the V5 outcome section at the end of this version for what was actually built
+and what changed from the plan.
+
 **Goal:** make the game genuinely playable and testable alone, with bots that behave believably
 enough to be worth fighting.
 
@@ -450,6 +453,55 @@ enough to be worth fighting.
   learned behaviour.
 
 - **Depends on:** V4 (match structure, test map), V3 (armor and damage, which the AI must respect).
+
+### V5 outcome
+
+The plan asked for several AI tanks, a difficulty selector, a headless batch runner, and a navigation
+graph. **What shipped is one competent opponent, and the difference is deliberate and recorded here
+rather than left for the next agent to discover.**
+
+**What was built**
+
+- `src/core/ai/shot-evaluation.ts` — predicts a shot with the *real* penetration model before firing.
+- `src/core/ai/engagement-plan.ts` — remembers whether shooting is working and picks an intent.
+- `src/core/ai/navigation.ts` — picks a reachable standing place and drives there without getting stuck,
+  plus `reverseFrom` for backing out of a fight without turning away from it.
+- `src/core/ai/enemy-controller.ts` — still a single `InputCommand` producer with no path to the damage
+  model. ADR-0014's symmetry is intact and asserted.
+
+**What changed from the plan, and why**
+
+- **One opponent, not several.** `Simulation` supports a single target, and a second tank is a
+  structural change to the world rather than an AI change. Building the AI's decision-making properly
+  first was worth more than building two shallow copies of it.
+- **Flanking shipped, despite being on the deferred list.** It was not optional. The owner resolved
+  OD-11 by deciding that frontal armour must stay strong and the *opponent* must find a better angle,
+  so the flank is the mechanism the decision depends on. It is a bounded, committed reposition — not
+  coordinated behaviour, which remains deferred.
+- **No difficulty selector.** It is a product decision about what difficulties exist and how they are
+  presented, and nothing in this version's systems needed it. The opponent's competence is currently a
+  single documented profile.
+- **No headless batch runner.** A determinism test over a seeded battle covers the reproducibility
+  requirement; a batch runner for balance sweeps is still open and is listed below.
+
+**Validation performed**
+
+- `npm run verify` passes: typecheck, lint (including the core-purity rule), and 332 tests.
+- Five tests added in this version specifically pin defects found during it — the angular fire gate, the
+  cancelled flank, the mismatched range bands, the charging-player regression, the loss of a circling
+  player, and a determinism check that compares the gun tick by tick rather than one final position.
+- Visual verification was performed in the browser with `tools/ai-duel.js`: against a parked player the
+  opponent fired 8 shells, all 8 reached the vehicle, and the player took 150 damage while the opponent
+  repositioned from 55 m to 26 m to present a flank. Screenshots in `shots/v5-final/`.
+- Measured across five seeds and three player behaviours (parked, circling, charging), the opponent
+  lands a penetration in every case.
+
+**Not done, carried forward**
+
+- A headless batch runner for balance measurement (`npm run sim`).
+- Difficulty selection, which needs an owner decision on what the difficulties are.
+- A navigation graph, deliberately deferred to V6 where real map data exists to build one against.
+
 
 ---
 

@@ -44,6 +44,7 @@ simulation, scene, HUD, and visuals for inspection.
 | `probe.js` | dumps terrain, camera, vehicle, and mesh geometry as JSON |
 | `inspect.js` | parks the camera beside the player's tank for silhouette review |
 | `fire.js` | drives up and fires at the target, to check combat feedback |
+| `ai-duel.js` | lets the V5 opponent fight a parked player and reports what it did |
 
 The game also exposes `setInputFrame(frame)`, which overrides real input for a frame so firing can be
 tested without a captured pointer. It is `null` during normal play.

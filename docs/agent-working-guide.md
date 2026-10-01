@@ -298,3 +298,36 @@ position were all wrong in ways every automated gate passed, and each was found 
 screenshot or by measuring the running simulation. The terrain amplitude in particular was cut from 9 m
 to 5 m because a probe measured the opponent spawning 14 m below the player on ground neither vehicle
 could manoeuvre on. When something looks wrong, write a probe and measure before changing a constant.
+
+## V5 additions: working on the opponent
+
+**Measure the miss, do not infer it.** The single most expensive defect in V5 was a fire gate that
+measured a *bearing* error, so the permitted miss grew with range — 4.3 m at 48 m on a 3.3 m-wide tank.
+Nothing in the code or the tests said the gunnery was broken; only measuring the perpendicular distance
+from the barrel ray to the target did. When judging whether the opponent can shoot, log how far it
+missed by, not merely whether it fired.
+
+**A moving shooter cannot lay its gun.** If the tank is repositioning while its turret slews, the aim
+point moves faster than any finite traverse rate can follow, and the measured best achievable miss
+exceeds the vehicle's own size. Suspend movement until the gun is on target. That is a real property of
+the simulation, not a bug to tune away.
+
+**Never gate aiming on being able to fire.** The turret must stay trained on the enemy while the tank
+manoeuvres, or it is pointing at a stale position the moment the range becomes shootable. The genuinely
+wasteful case is not knowing where the enemy is, which is what line of sight is for.
+
+**Two rules must not disagree about the same distance.** The planner's engagement band and the gun's
+minimum range were independent numbers (32 m and 24 m), leaving a dead zone in between; and the range
+check ran above the flank logic, so it cancelled in-progress flanks every tick. When a distance appears
+in more than one place, assert the relationship in a test.
+
+**A restart must rewind state, not reset it to a seed.** The `EnemyController` constructor consumes a
+random draw, so `rng.reseed(seed)` alone leaves the stream one draw ahead and a "replayed" battle fires
+its first shot with different scatter. The controller snapshots its post-construction generator state
+and restores that. More generally: comparing a single final position is a weak determinism check, since
+a divergence in one field can hide until it reaches something you happen to assert. Compare the state
+you care about on every tick.
+
+**Retreating is not driving.** Using `steerToward` to back away turns the hull through 180 degrees,
+spending the whole hull traverse rate and pointing the tank's back at the enemy. `reverseFrom` backs up
+instead, keeping both the range and the facing.

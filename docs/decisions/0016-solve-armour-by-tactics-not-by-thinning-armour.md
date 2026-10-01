@@ -79,3 +79,56 @@ is trying to win. The armour numbers remain explicitly temporary and may be bala
 
 - The AI's aim scatter is unchanged, so the opponent remains a fallible gunner. Making it superhuman
   would have hidden whether the positioning logic actually worked.
+
+## Addendum: being armour-aware is necessary and not sufficient
+
+The three capabilities above were necessary. They were also, on their own, **not sufficient to make the
+opponent competent**, and the reasons are worth recording separately because every one of them looked
+like a tuning problem and none of them was.
+
+Each was found by measuring the running simulation rather than by reading the code, and each is now
+pinned by a test.
+
+1. **The fire gate has to measure distance, not angle.** Gating firing on a *bearing* error means the
+   permitted miss grows with range, so the same tolerance that is generous at 40 m is a guaranteed miss
+   at 70 m. Measured against a parked player, a 4-degree gate allowed 4.3 m of lateral error at 48 m and
+   5.6 m at 71 m, on a vehicle 3.3 m wide. The gunner was being told it was on target while pointing a
+   full vehicle-width past the target. The gate is now a perpendicular miss distance, which is both the
+   physically honest measure and the only one whose meaning does not change with range.
+
+2. **A tank must stop moving before it can lay its gun.** The opponent was driving while it slewed, so
+   station-keeping kept moving the aim point faster than a 24 deg/s turret could follow it. Measured
+   best-achievable aim against a parked player: a **median 3.2 m off target, wider than the tank**.
+   No tolerance value could have fixed that, because the target was running away by its own hand.
+   Movement is now suspended until the gun is laid, which is also what a real crew does.
+
+3. **Aiming must not be gated on being able to shoot.** Refusing to aim outside the firing band meant
+   that inside that band the turret held a stale angle while the tank drove at 5.6 m/s, and the
+   measured miss grew monotonically to **45 m over twelve seconds** while the opponent left the arena.
+   A crew keeps the gun trained on the enemy while it manoeuvres, and the same is true here.
+
+4. **Rules about the same distance must agree.** The planner's near band (32 m) and the gun's minimum
+   range (24 m) were separate numbers that disagreed, leaving a range in which the opponent could shoot
+   and had decided not to. Worse, the range check ran *above* the flank logic, so it cancelled an
+   in-progress flank on the very next tick: the opponent flapped between `flank` and `adjust-range` for
+   the rest of the fight with its flank destination a steady 78 m away, never moving toward it. A flank
+   is now allowed to finish, and the bands are asserted against each other.
+
+5. **Retreat by reversing, not by turning around.** Backing away with `steerToward` means turning the
+   hull through 180 degrees and driving off with the tank's back to the enemy, spending the whole hull
+   traverse rate and leaving the gun pointing at nothing. Measured: the opponent stood still for 120
+   ticks while its hull swung round, then lost the engagement entirely. A tank that is too close backs
+   up, keeping both the range and the facing.
+
+6. **A restart has to rewind the random stream to where it was, not to the seed.** The constructor
+   consumes one draw to pick a flank side. Reseeding without replaying that draw left the stream one
+   ahead, so a "replayed" battle drew its first aim scatter from a different offset. Two runs matched on
+   positions, hit points and shot counts for 228 ticks and then diverged in the gun's elevation alone -
+   which is why the determinism test passed on positions and still failed. The controller now snapshots
+   its post-construction generator state and restores it, and a test compares the barrel's orientation
+   tick by tick rather than trusting a single final position.
+
+The general lesson is the one the version plan already states: **passing the validation criteria is the
+minimum.** Every one of the six defects above passed a code review, and most of them passed the
+automated gates too. They were found by instrumenting the running fight and writing down what the
+numbers were.

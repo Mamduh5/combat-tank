@@ -80,23 +80,58 @@ it deserves to be made deliberately rather than as a side effect of AI work.
 
 ## OD-13: The opponent loses a circling player
 
-- **Status:** Open - known limitation of V5
+- **Status:** **Closed in V5**
 - **Raised:** V5
 
 Found by scripted testing, and the clearest remaining weakness in the AI.
 
-Against a player circling steadily, the opponent acquires a target, fires occasionally, and then lets the
-range grow monotonically - measured 45 m, then 94 m, then 141 m, then 165 m - until it loses line of
-sight entirely and spends the remainder of the fight in `search`, driving to an arena centre the player
+Against a player circling steadily, the opponent acquired a target, fired occasionally, and then let the
+range grow monotonically - measured 45 m, then 94 m, then 141 m, then 165 m - until it lost line of
+sight entirely and spent the remainder of the fight in `search`, driving to an arena centre the player
 is no longer at.
 
-The cause is that `search` treats the last known position as a place to visit rather than a heading to
-pursue, and `adjust-range` cannot catch a target that is not approaching. It is a gap in *pursuit*, not
-in the tactical layer V5 was built around, which is why it survived a version whose stated goal was that
-fighting the opponent should feel meaningfully different from fighting V4's.
+The cause was that `search` treated the last known position as a place to visit rather than a heading to
+pursue, and `adjust-range` could not catch a target that is not approaching. It was a gap in *pursuit*,
+not in the tactical layer V5 was built around, which is why it survived a version whose stated goal was
+that fighting the opponent should feel meaningfully different from fighting V4's.
 
-Deferred rather than rushed because a correct fix is a pursuit behaviour with its own failure modes -
-oscillation, tail-chasing, giving up - and those deserve the same measured treatment the rest of V5 got.
+**What closed it.** `EnemyController.pursuitPoint` extrapolates the player's last known motion instead
+of revisiting the stale position, so the destination runs away at the player's own speed and the
+opponent spends the approach closing rather than arriving. Measured over a full minute against a
+circling player, the range now peaks at 116 m and returns to 18 m, with penetrations on every seed
+tested, against a previous 160 m and permanent `search`.
+
+The extrapolation is deliberately crude - constant velocity over a four-second horizon, no proper
+intercept. A real solution needs map data that does not exist until V6, so this is a provisional shape
+rather than a finished one; it is tracked there rather than reopened here.
+
+---
+
+## OD-14: V5's stated scope was not delivered in full
+
+- **Status:** Open - needs an owner decision on sequencing
+- **Raised:** V5
+
+`docs/version-plan.md` scoped V5 as several AI tanks, a difficulty selector, and a headless batch
+runner. What shipped is **one competent opponent**, and the gap is real rather than a matter of
+interpretation.
+
+Deliberately reduced, and defensible on its own terms:
+
+- **One opponent, not several.** `Simulation` holds a single target; a second tank is a structural change
+  to the world rather than an AI change.
+- **No difficulty selector.** What the difficulties *are* is a player-facing product decision, and per
+  `docs/agent-working-guide.md` §3 that is the owner's call rather than an agent's.
+
+Not yet built, and genuinely owed:
+
+- **`npm run sim`, the headless batch runner.** The version plan asks for it and lists balance measurement
+  as the reason. It is unblocked, well-specified, and would make every future tuning pass measurable
+  instead of anecdotal. It is the highest-value unfinished item in the project right now.
+
+The recommendation is to build the batch runner before V6 begins, since V6's map work needs it to
+sanity-check positioning, and to ask the owner what difficulties should exist rather than inventing them.
+
 # Open Decisions
 
 **Status:** Authoritative for what is *not* decided.

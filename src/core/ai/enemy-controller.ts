@@ -1,8 +1,9 @@
 import { makeInput, type InputCommand } from '../../shared/input.js';
-import { atan2, cos, radToDeg, sin, vec3, type Vec3, wrapAngle } from '../math/index.js';
+import { atan2, cos, sin, vec3, type Vec3 } from '../math/index.js';
 import { Rng } from '../rng/index.js';
 import type { Terrain } from '../world/terrain.js';
 import type { Tank } from '../vehicle/tank.js';
+import { gunDirection } from '../vehicle/turret.js';
 import { buildWorldPlates } from '../armor/geometry.js';
 import {
   assessPlate,
@@ -14,6 +15,7 @@ import {
 import {
   chooseFlankDestination,
   createSteeringMemory,
+  reverseFrom,
   steerToward,
   type SteeringMemory,
 } from './navigation.js';
@@ -85,6 +87,24 @@ const STATION_KEEP_TOLERANCE_M = 4;
  */
 const ENGAGING_CREEP_THROTTLE = 0.22;
 
+/**
+ * How much better another plate must be, in millimetres, before the opponent switches aim to it.
+ *
+ * Sized above the difference between two roughly equal plates and below the gap between genuinely different
+ * choices - a flank at ~70 mm surplus against a turret face at ~10 mm. See chooseShot for why this
+ * value is the difference between an opponent that fires and one that never does.
+ */
+const SHOT_HYSTERESIS_MM = 12;
+
+/**
+ * How far past the preferred range a retreat is allowed to aim, metres.
+ *
+ * The retreat needs somewhere to aim, and "directly away by 58 m" overshoots the engagement band
+ * entirely. A smaller allowance keeps the destination inside the band, so the opponent returns to a
+ * range it can shoot from rather than to open ground it has to find its way back from.
+ */
+const RETREAT_OVERSHOOT_ALLOWANCE_M = 14;
+
 /** Tuning for the opponent's driving and gunnery. Prototype values, not balance. */
 export const ENEMY_TUNING = {
   /**
@@ -112,23 +132,67 @@ export const ENEMY_TUNING = {
   maxEngageRangeM: 130,
 
   /**
-   * Turret bearing tolerance, degrees.
+   * How close the gun must actually be to the aim point before it may fire, **metres**.
    *
-   * How far the gun may be from the targets bearing and still count as "on target". Consulted only by
-   * the intents that shoot at all, so a generous value costs the opponent nothing when it has no
-   * solution - and that is the point.
+   * ## Why this is a distance and not an angle
    *
-   * It was 1.8 degrees in V4, which turns out to be far too tight to survive a fast-closing target.
-   * Measured during V5 development against a player driving straight at the opponent: the turret slewed
-   * from 1 to 45 degrees tracking the player perfectly well, and because the bearing swept slightly
-   * faster than the turrets 24 deg/s could turn, the error stayed roughly constant. The gun was always
-   * "on target" by the gunners eye and never by the gate, so the opponent fired nothing at all.
+   * V4 and the first V5 build gated firing on a *bearing* error, and that was quietly the single
+   * largest cause of the opponent missing everything it shot. An angular tolerance means the permitted
+   * miss grows with range, so the same number that is generous at 40 m is catastrophic at 70 m.
+   * Measured against a parked player, the 4-degree gate permitted **4.3 m of lateral error at 48 m** and
+   * **5.6 m at 71 m** on a tank that is 3.3 m wide. The gunner was told it was on target while pointing
+   * a full vehicle-width past the target, and every one of those shots missed.
    *
-   * Measured after the range-control fix: at five degrees the opponent took eleven shots at a parked player
-   * pointed at the vehicle rather than merely near it. Combined with aimErrorDeg this is a gunner who
-   * takes reasonable shots rather than one waiting for a perfect one.
+   * The trace behind this value, measured as perpendicular distance from the barrel ray to the target:
+   *
+   * | miss distance | outcome |
+   * | --- | --- |
+   * | 0.35 m, 0.73 m | struck the player |
+   * | 2.26 m, 3.56 m, 4.32 m, 5.72 m | passed the player entirely |
+   *
+   * A linear gate is also the physically honest one: what decides a hit is where the shell goes, not
+   * how many degrees of arc that is. It makes the tolerance mean the same thing at every range, which is
+   * what allows a single number to be tuned once.
+   *
+   * Sized just inside the hull's half-width (1.65 m) so that a shot taken on a solution is genuinely
+   * likely to arrive, while still being loose enough that a target crossing the front at 24 deg/s is
+   * shootable at all. The remaining inaccuracy is the honest part: `aimErrorDeg`.
    */
-  fireBearingToleranceDeg: 2.2,
+  fireMissToleranceM: 1.2,
+
+  /**
+   * Below this range the opponent holds its ground instead of creeping forward, metres.
+   *
+   * The creep exists to give a stationary shooter some parallax, so that a charging player's bearing
+   * does not sweep away faster than the turret can follow. That benefit disappears exactly when the
+   * player is already close, and is outweighed there by the cost: creeping toward an approaching tank
+   * shortens the range faster than the gun can be laid, and eventually walks the opponent inside
+   * `minEngageRangeM`, where the planner stops it shooting at all.
+   *
+   * Set just above the range at which the opponent stops being able to shoot, so the handover from
+   * "creep to keep the angle" to "hold and let the gun come round" happens before, not after, the
+   * dead zone is reached.
+   */
+  creepSuspendRangeM: 28,
+
+  /**
+   * Range a retreat stops at, metres — just outside the near edge of the engagement band.
+   *
+   * A retreat exists to get back to a range where the gun can be used. Stopping at the preferred
+   * fighting range instead overshoots the band and puts the opponent back in the situation it was
+   * escaping, so the destination is pinned just past the near limit rather than at the ideal range.
+   */
+  reengageRangeM: 28,
+
+  /**
+   * How far ahead of a lost player's last known position the opponent aims while pursuing, seconds.
+   *
+   * The lead has to be long enough that the predicted point is still worth driving to by the time the
+   * opponent arrives, and short enough that a player who reverses is not chased into empty ground. A few
+   * seconds is the useful window: it is roughly the time the opponent needs to turn a tank around, and
+   * any longer just aims further from where the player actually is.
+   */
+  pursuitLeadSeconds: 4,
 
   /**
    * Range the flank planner tries to end up at, metres.
@@ -209,6 +273,14 @@ export class EnemyController {
   private readonly terrain: Terrain;
   private readonly rng: Rng;
 
+  /**
+   * The generator's state immediately after construction, so a restart replays rather than continues.
+   *
+   * Held as a snapshot rather than recomputed from the seed because the constructor consumes a draw, and
+   * forgetting that is a silent, invisible way to make a "replay" differ from the original.
+   */
+  private readonly rngStateAfterConstruction: number;
+
   /** What the opponent remembers about the fight. Cleared on restart. */
   private readonly memory: EngagementMemory;
 
@@ -234,6 +306,18 @@ export class EnemyController {
   /** Where the current flank is driving, or `null` when not flanking. */
   private flankDestination: Vec3 | null = null;
 
+  /** The plate currently being aimed at, so the aim does not dither between similar candidates. */
+  private chosenPlateId: string | null = null;
+
+  /**
+   * The world point the gun was last trained on, kept so movement can ask how far off it is.
+   *
+   * Held as state rather than passed as a parameter because the question "is my gun still coming
+   * around?" is asked by the *movement* layer, which otherwise has no idea what the gun is doing. See
+   * `chooseMovement` for why the answer changes whether the opponent drives.
+   */
+  private currentAimPoint: Vec3;
+
   /** Distance to the player at the last tick, metres. Read by tests and the HUD. */
   lastRangeM = Number.POSITIVE_INFINITY;
 
@@ -258,6 +342,36 @@ export class EnemyController {
 
     this.preferredFlankSide = this.rng.chance(0.5) ? 1 : -1;
     this.memory = createEngagementMemory(this.preferredFlankSide);
+    // Captured *after* the flank-side draw, so it is the stream position the first tick of a battle
+    // actually starts from. See `rewindRng` for why this cannot be recomputed from the seed alone.
+    this.rngStateAfterConstruction = this.rng.getState();
+    // Seeded to the player's own hull centre, which is where the gun rests before the player is seen.
+    // Any value would do for the first tick - `think` overwrites it before it is ever read - but leaving a
+    // definite field is better than relying on that, and it keeps the type honest.
+    this.currentAimPoint = this.playerAimPoint();
+  }
+
+  /**
+   * Returns the opponent's random stream to the state it was in immediately after construction.
+   *
+   * ## Why this cannot simply be `reseed(seed)`
+   *
+   * The constructor draws once from the generator, to pick `preferredFlankSide`. Reseeding and then
+   * drawing again would work only if every consumer of `this.rng` were also rewound, and the simplest
+   * version of that - reseed, and rely on `preferredFlankSide` still holding its old value - is wrong,
+   * because the stream is then one draw ahead of where it was. The next aim scatter came from a
+   * different place in the sequence, so a restarted battle aimed somewhere else.
+   *
+   * Measured: two runs of the same seeded battle diverged at tick 228, on the first shot, purely in the
+   * gun's elevation, because the scatter it fired with was drawn from a different offset in the stream.
+   * Everything the tests checked - positions, hit points, shot counts - matched to the last tick before
+   * that, which is what made it look like a physics problem rather than a bookkeeping one.
+   *
+   * So the post-construction state is captured once, here, and restored wholesale. Any future draw added
+   * to the constructor is then covered automatically, rather than needing this method edited to match.
+   */
+  private rewindRng(): void {
+    this.rng.setState(this.rngStateAfterConstruction);
   }
 
   /**
@@ -267,8 +381,9 @@ export class EnemyController {
    * history — including a full "three ineffective shots" streak — so it would open by immediately
    * flanking. That is exactly the stale state that makes a restart feel broken.
    *
-   * The RNG is deliberately **not** reseeded, so the random stream continues and an encounter stays
-   * reproducible from construction alone rather than from the moment of the restart.
+   * The RNG is deliberately **rewound**, not merely advanced. `Simulation.restart` promises to reproduce
+   * the opening encounter, and an opponent whose aim scatter carried on from where the previous battle
+   * left off would make every restart a different fight while claiming to be the same one.
    */
   restart(): void {
     const fresh = createEngagementMemory(this.preferredFlankSide);
@@ -282,11 +397,20 @@ export class EnemyController {
     this.memory.flankDestination = fresh.flankDestination;
     this.memory.probeStreak = fresh.probeStreak;
 
+    // Rewound to the post-construction stream position, not reseeded and re-drawn. See `rewindRng` for
+    // the divergence this replaces.
+    this.rewindRng();
+
     this.steering = createSteeringMemory();
     this.lastKnownPosition = null;
     this.ticksSinceSeen = 0;
     this.hasEverSeenPlayer = false;
     this.flankDestination = null;
+    this.chosenPlateId = null;
+    // The gun's aim is a decision, not a memory, but it is state like any other: leaving the previous
+    // battle's aim point in place would let the first tick of the new one ask "is my gun on target?"
+    // about a point from a fight that has already ended.
+    this.currentAimPoint = this.playerAimPoint();
     this.lastRangeM = Number.POSITIVE_INFINITY;
     this.lastSawPlayer = false;
     this.diagnostics = emptyDiagnostics();
@@ -354,7 +478,7 @@ export class EnemyController {
     // Every plate is assessed against real line of sight and the real penetration model. This is what
     // turns "shoot at the tank" into "shoot at the thinnest thing I can see, if it will work".
     const assessments = this.assessTargetPlates(eye, canSeePlayer);
-    const bestShot = canSeePlayer ? bestPredictedShot(assessments) : null;
+    const bestShot = canSeePlayer ? this.chooseShot(assessments) : null;
 
     // --- Decide ------------------------------------------------------------------------------
     const decision = chooseIntent(
@@ -373,8 +497,12 @@ export class EnemyController {
     this.memory.flankDestination = this.flankDestination;
 
     // --- Act ---------------------------------------------------------------------------------
+    // The aim point is chosen **before** movement, because movement consults it: the opponent holds
+    // still while its gun is still coming around, which stops it creeping out of its own firing range
+    // while the turret slews. `chooseMovement` therefore needs this tick's aim point, not last tick's.
+    const aimPoint = this.chooseAimPoint(decision.intent, bestShot, canSeePlayer);
+    this.currentAimPoint = aimPoint ?? this.playerAimPoint();
     const movement = this.chooseMovement(decision.intent, rangeM, canSeePlayer, dtSeconds);
-    const aimPoint = this.chooseAimPoint(decision.intent, bestShot, canSeePlayer, rangeM);
     const fire = this.chooseFire(decision.intent, bestShot, rangeM, dtSeconds);
 
     this.updateDiagnostics(decision, bestShot, assessments, movement.avoiding, rangeM);
@@ -414,6 +542,80 @@ export class EnemyController {
     );
   }
 
+  /**
+   * Chooses which plate to shoot at, with hysteresis so it does not dither between two similar answers.
+   *
+   * ## Why plain "best margin wins" is not good enough
+   *
+   * Measured during V5 development: against a stationary player presenting a frontal plate, the opponent
+   * spent 2200 ticks in `engage` with a perfectly good predicted shot available, and fired **five shells
+   * in sixty seconds** - when its reload cycle alone permits about eleven.
+   *
+   * The cause is not the gun, the range, or the intention. A player facing the shooter has **both**
+   * `turret-side` plates marginally visible, at 70 mm each, with margins that differ by a fraction of a
+   * millimetre as the two vehicles breathe. `bestPredictedShot` therefore returned a different plate
+   * essentially at random, alternating between the left and right of the player's turret. Those two
+   * plates are about 2.1 m apart, which at 55 m is roughly 2.2 degrees of bearing - exactly the fire
+   * tolerance. So the aim point hopped between two bearings the turret could never quite settle on, and
+   * the fire gate never opened. The opponent was aiming at a target that kept swapping places.
+   *
+   * This is the classic hysteresis problem, and the fix is standard: **once a target is chosen, keep it
+   * until something is meaningfully better.** The opponent holds its aim long enough for the turret to
+   * actually arrive, which is also how a gunner behaves - you do not flick between two equally good
+   * pieces of armour sixty times a second.
+   *
+   * @param assessments this tick's plate assessments, in world space
+   */
+  private chooseShot(assessments: readonly PlateAssessment[]): PlateAssessment | null {
+    const best = bestPredictedShot(assessments);
+    const previous = this.chosenPlateId;
+
+    if (best === null) {
+      this.chosenPlateId = null;
+      return null;
+    }
+
+    if (previous !== null && best.plateId !== previous) {
+      const current = assessments.find((a) => a.plateId === previous);
+      // Only worth abandoning the current aim point if the alternative is clearly better, rather than
+      // merely better this tick.
+      if (current !== undefined && current.predictedPenetration && best.marginMm - current.marginMm < SHOT_HYSTERESIS_MM) {
+        return current;
+      }
+    }
+
+    this.chosenPlateId = best.plateId;
+    return best;
+  }
+
+
+  /**
+   * Where the opponent should drive to re-find a player it has lost sight of.
+   *
+   * A straight-line extrapolation of the player's last known motion, not the last known position.
+   *
+   * ## Why the difference is the whole fix
+   *
+   * Driving *to* where the player was means driving to a point that is no longer there, and a target
+   * that is still moving ensures it never is. The opponent closes on the stale point, arrives, finds
+   * nothing, and repeats — while the range grows monotonically for the whole fight. Measured against a
+   * circling player: 55 m, 90 m, 144 m, 160 m, and then permanent `search`.
+   *
+   * Extrapolating instead means the destination runs away at the player's own speed, so the opponent
+   * spends the approach closing rather than arriving. That converts an unwinnable pursuit into a
+   * converging one, and re-acquisition becomes a matter of turning around quickly enough.
+   *
+   * The extrapolation is deliberately crude — constant velocity over a fixed horizon, no attempt at a
+   * proper intercept. It only needs to be roughly right: over-correcting toward a predicted point is
+   * no worse than driving to a point the player has already left, and a real solution needs map data
+   * that does not exist until V6.
+   */
+  private pursuitPoint(): Vec3 {
+    const from = this.lastKnownPosition ?? this.player.state.position;
+    const heading = this.player.state.headingRad;
+    const speed = Math.max(0, this.player.state.speedMps);
+    return pointFrom(from, heading, speed * ENEMY_TUNING.pursuitLeadSeconds);
+  }
 
   /**
    * Converts the chosen intent into throttle and turn demands.
@@ -437,12 +639,37 @@ export class EnemyController {
         // Go to the last known position, then to the arena centre. Searching is the one behaviour that
         // must not require sight of the target, or the opponent would freeze precisely when it has lost
         // the player and most needs to go and look for them.
+        //
+        // **Pursue, do not visit.** This was the last real weakness in the V5 opponent, and the
+        // distinction is the whole of it. Driving to the last known position treats it as a place to
+        // arrive at, so a player who is still moving walks away from it as the opponent approaches and
+        // the range grows without bound. Measured against a steadily circling player: 55 m, 90 m,
+        // 111 m, 144 m, 160 m, and then the opponent was driving to an arena centre the player had long
+        // since left, in permanent `search`, for the rest of the fight.
+        //
+        // What fixes it is to aim at where the player *is going* rather than where it was, which is the
+        // same reasoning a pursuer uses and the same one a player leads a moving target with. A target
+        // that keeps moving is not lost; it is behind us and closing, and the only correct response is
+        // to keep driving after it. The prediction is a straight-line extrapolation over a couple of
+        // seconds, deliberately crude: it only has to beat the opponent's own top speed over the time it
+        // takes to turn around, and a real intercept calculation is V6 work with real map data.
         const lostTicks = Math.round(ENEMY_TUNING.searchTimeoutSeconds * TICKS_PER_SECOND);
-        const target =
-          this.lastKnownPosition !== null && this.ticksSinceSeen <= lostTicks
-            ? this.lastKnownPosition
-            : ARENA_CENTRE;
-        return this.driveTo(target, dtSeconds);
+        if (this.lastKnownPosition !== null && this.ticksSinceSeen <= lostTicks) {
+          return this.driveTo(this.pursuitPoint(), dtSeconds);
+        }
+        // Nothing recent to work from: sweep for the player rather than sitting in one place. The arena
+        // centre is a poor guess in general, so the opponent heads for the player's last known heading
+        // instead, which at least carries it toward the side the player was moving off to.
+        return this.driveTo(
+          this.lastKnownPosition !== null
+            ? pointFrom(
+                this.lastKnownPosition,
+                this.player.state.headingRad,
+                ENEMY_TUNING.searchTimeoutSeconds,
+              )
+            : ARENA_CENTRE,
+          dtSeconds,
+        );
       }
 
       case 'adjust-range': {
@@ -456,9 +683,37 @@ export class EnemyController {
         // heading is tempting because it keeps the gun pointing sensibly, but it only opens the range
         // if the player happens to be behind — and by definition here they are in front, so it would
         // drive the opponent straight into them.
+        //
+        // The retreat is a **bounded move out of the dead zone, not a flight to the far side of the
+        // map**. Measured during V5 development: retreating toward `preferredRangeM` (58 m) from 20 m
+        // carried the opponent past the whole engagement band and out to 45 m and beyond, at which point
+        // it lost line of sight and fell into `search`. It was being told to get back into a fight and
+        // was instead leaving it, because the distance it was told to aim for lay on the wrong side of
+        // the band it needed to re-enter. Backing off to just outside the near edge of the band stops
+        // the moment the range is worth shooting from again, which is the entire point of retreating.
+        // Back up rather than drive away, so the hull keeps facing the player and the gun stays on it.
+        // See `reverseFrom` for why turning around to retreat is the wrong move.
+        if (rangeM < ENEMY_TUNING.reengageRangeM) {
+          return {
+            ...reverseFrom(
+              this.enemy.state.position,
+              this.enemy.state.headingRad,
+              this.playerAimPoint(),
+              ENEMY_TUNING.throttleAuthority,
+              ENEMY_TUNING.hullTurnAuthority,
+            ),
+            avoiding: false,
+          };
+        }
+
+        // Between the dead zone and the preferred range, drive away to the preferred range normally.
+        const targetRangeM = Math.max(
+          ENEMY_TUNING.reengageRangeM,
+          ENEMY_TUNING.preferredRangeM - RETREAT_OVERSHOOT_ALLOWANCE_M,
+        );
         const awayBearing = bearingRad(this.enemy.state.position, this.playerAimPoint()) + Math.PI;
         return this.driveTo(
-          pointFrom(this.enemy.state.position, awayBearing, ENEMY_TUNING.preferredRangeM),
+          pointFrom(this.enemy.state.position, awayBearing, targetRangeM),
           dtSeconds,
         );
       }
@@ -470,6 +725,25 @@ export class EnemyController {
       case 'hold-position':
       case 'probe':
       case 'engage': {
+        // **Settle the gun before moving.** This check comes first, ahead of station-keeping, because
+        // it governs the whole branch rather than just the creep at the bottom of it.
+        //
+        // Measured during V5 development: the opponent had a valid predicted solution for 2547 ticks
+        // against a parked player and its best achievable aim was a **median 3.2 m off the target** —
+        // wider than the tank is. It never fired, and no amount of tolerance tuning could fix it,
+        // because the cause was not the gate. The cause was that the opponent was *driving* while it
+        // slewed: station-keeping drove it around the preferred range, and every metre of that movement
+        // moved the aim point faster than a 24 deg/s turret could follow it. The gun was chasing a
+        // target that was running away from it, by its own hand.
+        //
+        // A tank does not reposition while its gun is still coming around, and neither does this one.
+        // Holding still converts the aim point from a moving one into a nearly stationary one, which is
+        // the only condition under which a finite traverse rate can converge at all. It is also exactly
+        // what a real crew does: stop, lay the gun, fire, then move.
+        if (this.gunMissDistanceM(this.currentAimPoint) > ENEMY_TUNING.fireMissToleranceM) {
+          return { throttle: 0, turn: 0, avoiding: false };
+        }
+
         // Hold a useful fighting station rather than driving at the player.
         //
         // This is where the flanks pay off. The planner picked a spot that opens the player's weak
@@ -490,11 +764,20 @@ export class EnemyController {
         // it. Creeping forward keeps both vehicles moving, which is what keeps the bearing trackable
         // and the exchange two-sided.
         //
-        // But **only when it has a shot**. A tank with nothing worth firing at has no reason to close,
-        // and doing so anyway is worse than useless: measured against a parked player, creeping from
-        // 55 m simply walked the opponent into its own minimum range within ~20 seconds, at which point
-        // it retreated, reopened, and repeated — thrashing forever without ever holding the angle it had
-        // driven out to take. Movement is earned by having a solution.
+        // But **only when it has a shot**, which the check at the top of this branch has already
+        // established, and **only once the gun is actually laid on it**, which it has also established.
+        // Movement is earned by having a solution, and a solution is only real once the barrel is
+        // pointing at it.
+        //
+        // The creep is deliberately not applied when the player is closing fast, because creeping toward
+        // an approaching tank shortens the range faster than the turret can slew and walks the opponent
+        // into its own minimum range. Measured, it went from a valid 84 mm solution at 50 m to 28 m
+        // before firing once, and at 28 m the planner had already switched to `adjust-range`, which does
+        // not shoot — so the opponent closed on a target it could not yet hit and then lost the ability
+        // to shoot at it at all. Holding ground against a charge is the stronger play.
+        if (rangeM <= ENEMY_TUNING.creepSuspendRangeM) {
+          return { throttle: 0, turn: 0, avoiding: false };
+        }
         return {
           throttle: intent === 'engage' ? ENGAGING_CREEP_THROTTLE : 0,
           turn: 0,
@@ -622,43 +905,84 @@ export class EnemyController {
     intent: EngagementIntent,
     bestShot: PlateAssessment | null,
     canSeePlayer: boolean,
-    rangeM: number,
   ): Vec3 | null {
-    // Out of the engagement band it does not even try to aim, so it turns and drives first and settles
-    // the gun once it is somewhere worth shooting from.
-    if (rangeM > ENEMY_TUNING.maxEngageRangeM || rangeM < ENEMY_TUNING.minEngageRangeM) {
+    // Aiming is **not** gated on being able to shoot.
+    //
+    // The obvious rule is "only aim when the range is worth a shot", so the opponent does not waste
+    // traverse on a target it will not engage. Measured during V5 development, that rule created a dead
+    // zone the opponent could not recover from. Inside `minEngageRangeM` the controller returned `null`,
+    // so the turret held whatever angle it last had while the tank **drove at 5.6 m/s**. A moving vehicle
+    // sweeps the bearing to a fixed target far faster than a 24 deg/s turret can follow: the measured
+    // miss distance grew monotonically to 45 m over 12 seconds, the tank drove out of the arena, and
+    // the opponent was still driving in a straight line when the trace ended. It was not searching or
+    // flanking, and it could not have fired at anything, because its gun was pointed at where the
+    // player had been.
+    //
+    // A real crew keeps the gun trained on the enemy while it manoeuvres. That costs traverse and buys
+    // a gun that is already laid the moment the range becomes shootable, which is the only thing that
+    // makes backing off and re-engaging work at all. Traverse is not a resource to be spent carefully;
+    // an untrained gun is the expensive thing.
+    //
+    // The genuinely wasteful case - having no idea where the enemy is - is handled by the visibility
+    // check below rather than by the range.
+    if (!canSeePlayer) {
       return null;
     }
 
-    // Flanking, searching and repositioning have no plate to shoot at: the opponent is driving, and
-    // slewing the gun onto a target it is not going to shoot from would only waste traverse.
-    if (
-      intent === 'flank' ||
-      intent === 'search' ||
-      intent === 'adjust-range' ||
-      intent === 'withdraw'
-    ) {
-      return canSeePlayer ? this.playerAimPoint() : null;
+    // Nothing predicted to hit: aim at the hull so the gun is still pointed somewhere sensible while the
+    // opponent repositions. `flank` and `search` are the two cases where even that is not worth it,
+    // because the opponent is committed to a drive and a target that is not in front of it will not be
+    // there when it arrives.
+    if (intent === 'flank' || intent === 'search' || intent === 'withdraw') {
+      return intent === 'flank' ? this.playerAimPoint() : null;
     }
 
     const base = bestShot === null ? this.playerAimPoint() : this.plateAimPoint(bestShot);
     // Scatter is applied only when the gun is genuinely on target, not continuously. See
     // `applyAimScatter` for why that distinction turned out to matter.
-    const onTarget = this.gunBearingErrorDeg(base) <= ENEMY_TUNING.fireBearingToleranceDeg;
+    const onTarget = this.gunMissDistanceM(base) <= ENEMY_TUNING.fireMissToleranceM;
     return onTarget ? this.applyAimScatter(base) : base;
   }
 
   /**
-   * How far the gun is from a world point in bearing, degrees.
+   * How far the gun is from a world point, in metres, measured **across the barrel's line of fire**.
    *
    * Factored out because both the aim point and the fire decision need the same measurement, and the
    * two must not drift apart: if the gun were judged on-target for firing but the aim point were chosen
    * by a different rule, the opponent would shoot at wherever its barrel happened to be pointing.
+   *
+   * ## Why perpendicular distance, and not bearing error
+   *
+   * The obvious measurement is the angle between the gun's heading and the bearing to the target. It is
+   * also the wrong one, and the reason is that **it is not what decides a hit**. A 4-degree bearing error
+   * is 0.7 m of miss at 10 m and 5 m of miss at 70 m, so a bearing gate cannot express "close enough to
+   * hit" at all: any value loose enough to be reachable at long range fires shots that cannot possibly
+   * arrive, and any value tight enough to guarantee arrival is unreachable against a crossing target.
+   *
+   * This measures the distance from the target point to the closest point on the barrel's ray, which is
+   * the actual miss. It uses the gun's real 3D direction rather than a horizontal bearing alone, so a
+   * gun that is pointing at the right compass direction but the wrong height is correctly rejected -
+   * a failure that a horizontal-only measurement cannot see at all.
    */
-  private gunBearingErrorDeg(aimAt: Vec3): number {
-    const bearingToTarget = bearingRad(this.enemy.state.position, aimAt);
-    const gunBearing = this.enemy.turretState.localAngleRad + this.enemy.state.headingRad;
-    return Math.abs(radToDeg(wrapAngle(bearingToTarget - gunBearing)));
+  private gunMissDistanceM(aimAt: Vec3): number {
+    const origin = this.enemyAimEye();
+    const direction = gunDirection(this.enemy.turretState, this.enemy.state.headingRad);
+
+    const toTargetX = aimAt.x - origin.x;
+    const toTargetY = aimAt.y - origin.y;
+    const toTargetZ = aimAt.z - origin.z;
+
+    // Project the target onto the barrel's axis. Clamped at zero so a target behind the muzzle measures
+    // from the muzzle rather than reporting a negative "distance along".
+    const along = Math.max(
+      0,
+      toTargetX * direction.x + toTargetY * direction.y + toTargetZ * direction.z,
+    );
+
+    const missX = toTargetX - direction.x * along;
+    const missY = toTargetY - direction.y * along;
+    const missZ = toTargetZ - direction.z * along;
+    return Math.sqrt(missX * missX + missY * missY + missZ * missZ);
   }
 
   /**
@@ -767,7 +1091,7 @@ export class EnemyController {
     }
 
     const aimAt = bestShot === null ? this.playerAimPoint() : this.plateAimPoint(bestShot);
-    return this.gunBearingErrorDeg(aimAt) <= ENEMY_TUNING.fireBearingToleranceDeg;
+    return this.gunMissDistanceM(aimAt) <= ENEMY_TUNING.fireMissToleranceM;
   }
 
   /**

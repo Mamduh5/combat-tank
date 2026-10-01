@@ -826,14 +826,20 @@ export class Simulation {
       return;
     }
     for (const result of this.incomingCombat) {
-      // An `armour-miss` is not counted. The opponent cannot distinguish "bounced off" from "went past"
-      // from inside its tank, and treating a plain miss as evidence that the *armour* is defeating it
-      // would send it repositioning because its aim was slightly off — a different problem with a
-      // different fix. The plate-matching in `resolveCombat` already means a vehicle-bound impact is a
-      // real plate strike.
-      if (result.kind !== 'armour-miss') {
-        this.enemyController.observeCombat(result.kind === 'penetrated');
-      }
+      // Every shot that did not get through counts as evidence, including one that passed beside the
+      // vehicle without striking a plate.
+      //
+      // The earlier version excluded `armour-miss` on the reasoning that the opponent cannot tell a
+      // bounce from a miss, and so should not treat a miss as evidence about the *armour*. That reasoning
+      // was wrong in effect and the cost was severe: measured over a parked player across ten seeds, the
+      // opponent fired four to six shells, most of which missed entirely, so its streak of "ineffective
+      // shots" never reached the threshold that triggers a flank. It probed forever and never adapted.
+      // On half the seeds the player finished the minute untouched.
+      //
+      // A crew can certainly tell the difference, and both outcomes carry the same information: the shot
+      // did not work from here. A bounce says the angle is wrong; a miss says the gun is not pointed at
+      // anything. Either way the opponent should stop repeating the attempt.
+      this.enemyController.observeCombat(result.kind === 'penetrated');
     }
   }
 
