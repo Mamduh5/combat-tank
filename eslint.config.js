@@ -137,4 +137,17 @@ export default tseslint.config(
       'no-restricted-globals': ['error', ...NON_DETERMINISTIC_GLOBALS],
     },
   },
+
+  // --- Development tooling -----------------------------------------------------------
+  // Node scripts used to drive the game for visual review (see `tools/README.md`). They run
+  // outside the build, import nothing from `src/`, and never ship, so the browser-global
+  // configuration above does not apply and they need the Node environment instead.
+  {
+    files: ['tools/**/*.mjs', 'tools/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
 );

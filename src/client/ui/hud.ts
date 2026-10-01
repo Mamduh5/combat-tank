@@ -33,6 +33,40 @@ export class Hud {
   private readonly hitModule: HTMLElement | null;
   private readonly status: HTMLElement | null;
   private readonly hint: HTMLElement | null;
+  /** Container for the developer diagnostics row, hidden unless debug mode is on. */
+  private readonly debugRow: HTMLElement | null;
+  /** The control that turns debug mode on and off, so its state can be reflected back. */
+  private readonly debugToggle: HTMLElement | null;
+  /** Centred shot-outcome banner and its supporting line. */
+  private readonly banner: HTMLElement | null;
+  private readonly bannerVerdict: HTMLElement | null;
+  private readonly bannerSub: HTMLElement | null;
+  /** Target status strip elements. */
+  private readonly targetPanel: HTMLElement | null;
+  private readonly targetName: HTMLElement | null;
+  private readonly targetHp: HTMLElement | null;
+  private readonly targetHpMax: HTMLElement | null;
+  private readonly targetHpFill: HTMLElement | null;
+  private readonly targetRange: HTMLElement | null;
+  /** First-launch briefing, dismissed once the player starts playing. */
+  private readonly briefing: HTMLElement | null;
+
+  /**
+   * Seconds the outcome banner stays on screen, counted down by `tick`.
+   *
+   * Long enough to read comfortably, short enough that it is gone before the player lines up the next
+   * shot. A banner that lingers becomes permanent furniture and stops being read as an event.
+   */
+  private bannerTimer = 0;
+
+  /**
+   * Whether the diagnostics row is currently hidden.
+   *
+   * Starts **visible** because the first thing to verify is that the armour model is doing something
+   * legible at all; hiding it by default would mean the numbers are never seen. Once the player has
+   * confirmed the model works, one key press moves them out of the way permanently.
+   */
+  private debugHidden = false;
 
   private lastSpeedText = '';
   private lastGearText = '';
@@ -60,6 +94,36 @@ export class Hud {
     this.hitModule = root.getElementById('hit-module');
     this.status = root.getElementById('hud-status');
     this.hint = root.getElementById('hud-hint');
+    this.debugRow = root.getElementById('hit-math');
+    this.debugToggle = root.getElementById('debug-toggle');
+    this.banner = root.getElementById('combat-banner');
+    this.bannerVerdict = root.getElementById('combat-verdict');
+    this.bannerSub = root.getElementById('combat-sub');
+    this.targetPanel = root.getElementById('hud-target');
+    this.targetName = root.getElementById('target-name');
+    this.targetHp = root.getElementById('target-hp');
+    this.targetHpMax = root.getElementById('target-hp-max');
+    this.targetHpFill = root.getElementById('target-hp-fill');
+    this.targetRange = root.getElementById('target-range');
+    this.briefing = root.getElementById('hud-briefing');
+  }
+
+  /**
+   * Per-frame housekeeping: ages out the outcome banner.
+   *
+   * A separate `tick` rather than folding the countdown into an update method, so the banner's
+   * lifetime is driven by elapsed time and not by whether some particular readout happened to change
+   * this frame.
+   */
+  tick(dtSeconds: number): void {
+    if (this.bannerTimer <= 0) {
+      return;
+    }
+    this.bannerTimer -= dtSeconds;
+    if (this.bannerTimer <= 0) {
+      this.bannerTimer = 0;
+      this.banner?.classList.remove('show');
+    }
   }
 
   /**
@@ -163,53 +227,127 @@ export class Hud {
     targetHp: number,
     modulesDestroyed: readonly string[] = [],
   ): void {
-    if (result === null) {
-      setText(this.hitOutcome, 'MISS');
-      this.hitOutcome?.classList.remove('penetrated', 'blocked', 'ricocheted');
-      this.hitPanel?.classList.add('hidden');
+    if (result === null || result.kind === 'armour-miss') {
+      this.showOutcome('MISS', null);
+      setText(this.hitDamage, '—');
+      setText(this.hitModule, '');
+      setText(this.hitDetail, '');
+      setText(this.hitMath, '');
       return;
-    }
-
-    // An armour miss carries no plate and no penetration result, so everything below is guarded on the
-    // kind. A switch rather than a ternary, because narrowing a discriminated union through nested
-    // conditionals is exactly the sort of thing that silently stops type-checking later.
-    let headline: string;
-    if (result.kind === 'penetrated') {
-      headline = `PENETRATED · ${result.plate.definition.region}`;
-    } else if (result.kind === 'ricocheted') {
-      headline = `RICOCHET · ${result.plate.definition.region}`;
-    } else if (result.kind === 'blocked') {
-      headline = `BLOCKED · ${result.plate.definition.region}`;
-    } else {
-      setText(this.hitOutcome, 'MISS');
-      this.hitOutcome?.classList.remove('penetrated', 'blocked', 'ricocheted');
-      this.hitPanel?.classList.add('hidden');
-      return;
-    }
-
-    setText(this.hitOutcome, headline);
-    if (this.hitOutcome !== null) {
-      this.hitOutcome.classList.remove('penetrated', 'blocked', 'ricocheted');
-      this.hitOutcome.classList.add(result.kind);
     }
 
     const p = result.penetration;
     const plate = result.plate.definition;
+    const section = plate.region.toUpperCase();
 
-    // The numbers behind the verdict: exactly what the penetration model compared.
-    setText(this.hitDetail, `${plate.thicknessMm}mm @ ${p.incidenceAngleDeg.toFixed(0)}°`);
-    setText(
-      this.hitMath,
-      `eff ${p.effectiveArmorMm.toFixed(0)}mm vs pen ${p.shellPenetrationMm.toFixed(0)}mm`,
-    );
+    // The verdict and the armour section: what the player needs in order to decide what to do next.
+    // The verdict is the only line at headline size, because distinguishing these three outcomes is
+    // the entire point of the feedback (vision principle P6).
+    this.showOutcome(result.kind.toUpperCase(), result.kind);
+    setText(this.hitDetail, section);
+
+    // Secondary: what it cost. Damage is what the player acts on, so it sits above the shell
+    // arithmetic rather than being buried beneath it.
     setText(
       this.hitDamage,
-      result.kind === 'penetrated'
-        ? `-${result.damage.vehicleDamage} HP → ${targetHp} HP`
-        : 'no damage',
+      result.kind === 'penetrated' ? `-${result.damage.vehicleDamage} HP · ${targetHp} left` : 'no damage',
+    );
+    setText(
+      this.hitModule,
+      modulesDestroyed.length > 0 ? `destroyed: ${modulesDestroyed.join(', ')}` : '',
     );
 
-    setText(this.hitModule, `module ${modulesDestroyed.length > 0 ? modulesDestroyed.join(', ') : '—'}`);
+    // Tertiary: the armour arithmetic. Kept because the model is the point of V3 and the numbers are
+    // worth learning, but held in a subordinate row so they inform without competing with the verdict.
+    setText(
+      this.hitMath,
+      `${plate.thicknessMm}mm @ ${p.incidenceAngleDeg.toFixed(0)}° → ${p.effectiveArmorMm.toFixed(0)}mm`,
+    );
+  }
+
+  /**
+   * Shows the headline outcome in its own colour, revealing the panel if it was hidden.
+   *
+   * Extracted because this sequence was previously written out in each branch of the outcome
+   * selection, where the copies had already begun to drift apart.
+   */
+  private showOutcome(label: string, kind: 'penetrated' | 'blocked' | 'ricocheted' | null): void {
+    setText(this.hitOutcome, label);
+    if (this.hitOutcome !== null) {
+      this.hitOutcome.classList.remove('penetrated', 'blocked', 'ricocheted');
+      if (kind !== null) {
+        this.hitOutcome.classList.add(kind);
+      }
+    }
+    this.hitPanel?.classList.remove('hidden');
+  }
+
+  /**
+   * Toggles the developer diagnostics row.
+   *
+   * The armour arithmetic is worth having but is not what the player needs in the moment of firing.
+   * Behind a toggle the primary verdict stays readable while the numbers remain one key press away
+   * for anyone learning the model or diagnosing a shot.
+   */
+  toggleDebug(): void {
+    this.debugHidden = !this.debugHidden;
+    this.debugRow?.classList.toggle('hidden', this.debugHidden);
+    this.debugToggle?.classList.toggle('active', !this.debugHidden);
+  }
+
+  /**
+   * Shows the shot outcome as a large centred banner.
+   *
+   * Separate from the corner panel on purpose. The corner panel is where the player looks when they
+   * want detail; the banner is where they are already looking when the shot lands. Both show the same
+   * verdict in the same colour, so the two never disagree and the player only has to learn one
+   * vocabulary.
+   */
+  showCombatBanner(verdict: string, kind: string, sub: string): void {
+    if (this.bannerVerdict !== null) {
+      this.bannerVerdict.textContent = verdict;
+      this.bannerVerdict.className = `verdict ${kind}`;
+    }
+    setText(this.bannerSub, sub);
+    this.banner?.classList.add('show');
+    this.bannerTimer = BANNER_HOLD_SECONDS;
+  }
+
+  /**
+   * Updates the target status strip, or hides it when there is no target.
+   *
+   * The panel exists because a stationary opponent is easy to lose track of: without it, "did that
+   * shell land?" and "how much is left?" both require the player to remember what they saw.
+   */
+  updateTargetStatus(
+    target: { name: string; hp: number; maxHp: number; rangeM: number; destroyed: boolean } | null,
+  ): void {
+    if (target === null) {
+      this.targetPanel?.classList.add('hidden');
+      return;
+    }
+
+    this.targetPanel?.classList.remove('hidden');
+    this.targetPanel?.classList.toggle('destroyed', target.destroyed);
+
+    setText(this.targetName, target.destroyed ? `${target.name} — DESTROYED` : target.name);
+    setText(this.targetHp, target.hp.toString());
+    setText(this.targetHpMax, `/ ${target.maxHp}`);
+    setText(this.targetRange, `${Math.round(target.rangeM)} m`);
+
+    // The bar is what makes "nearly dead" legible at a glance; the number alone does not, because a
+    // player glancing at a readout does not compute the fraction.
+    const fraction = target.maxHp > 0 ? target.hp / target.maxHp : 0;
+    if (this.targetHpFill !== null) {
+      this.targetHpFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+      this.targetHpFill.classList.toggle('hurt', fraction <= 0.5 && fraction > 0.25);
+      this.targetHpFill.classList.toggle('critical', fraction <= 0.25);
+    }
+  }
+
+  /** Dismisses the first-launch briefing. Called once the player has clearly started playing. */
+  hideBriefing(): void {
+    this.briefing?.classList.add('hidden');
   }
 
   /** Sets the status line. `isError` tints it, for startup failures. */
@@ -232,6 +370,14 @@ export class Hud {
 export function showHint(hud: Hud): void {
   hud.setStatus('Click to capture mouse');
 }
+
+/**
+ * How long the centred outcome banner stays visible, seconds.
+ *
+ * Long enough to read at a glance while the tank is still moving, short enough to be gone before the
+ * player lines up the next shot.
+ */
+const BANNER_HOLD_SECONDS = 2.4;
 
 /** Derives a gear-style label from current speed and throttle, for a quick read of intent. */
 function gearLabel(telemetry: VehicleTelemetry): string {

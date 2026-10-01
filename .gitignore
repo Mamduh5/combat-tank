@@ -25,3 +25,7 @@ Thumbs.db
 # Local simulation artifacts (replays, logs, headless run output)
 *.ctreplay
 logs/
+
+# Visual-review artifacts (tools/shot.mjs output and the headless browser profile)
+shots/
+.chrome-profile/

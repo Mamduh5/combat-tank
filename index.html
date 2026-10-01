@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Combat Tank — V1 Movement Sandbox</title>
+    <title>Combat Tank — Firing Range Prototype</title>
     <style>
       :root {
         color-scheme: dark;
@@ -47,7 +47,7 @@
 
       #hud-speed {
         left: 24px;
-        bottom: 24px;
+        bottom: 56px;
         background: var(--hud-bg);
         border-left: 3px solid var(--hud-accent);
         padding: 10px 16px 12px;
@@ -83,7 +83,7 @@
       /* --- Gunnery panel (V2) --- */
       #hud-gun {
         left: 24px;
-        bottom: 118px;
+        bottom: 150px;
         background: var(--hud-bg);
         border-left: 3px solid var(--hud-accent);
         padding: 8px 16px 10px;
@@ -283,6 +283,203 @@
       #hud-status.error {
         color: #ff8f7a;
       }
+
+      /* ---- V3R hierarchy and readability ---- */
+
+      /* Outcome colours. Reused by the centre banner and the hit panel so a verdict always looks the
+         same wherever the player sees it. */
+      :root {
+        --outcome-penetrated: #7ddc6a;
+        --outcome-blocked: #ff9d5c;
+        --outcome-ricochet: #6fc7e8;
+        --outcome-miss: var(--hud-dim);
+      }
+
+      /* Combat outcome banner.
+         Centred under the reticle so the verdict lands where the player was already looking when the
+         shot resolved, rather than off in a corner they have to find. Large, brief, and colour-coded:
+         this is the single most important thing the player learns from firing. */
+      #combat-banner {
+        left: 50%;
+        top: 58%;
+        transform: translateX(-50%);
+        text-align: center;
+        opacity: 0;
+        transition: opacity 260ms ease;
+      }
+
+      #combat-banner.show {
+        opacity: 1;
+      }
+
+      #combat-banner .verdict {
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+      }
+
+      #combat-banner .verdict.penetrated {
+        color: var(--outcome-penetrated);
+      }
+      #combat-banner .verdict.blocked {
+        color: var(--outcome-blocked);
+      }
+      #combat-banner .verdict.ricocheted {
+        color: var(--outcome-ricochet);
+      }
+      #combat-banner .verdict.miss {
+        color: var(--outcome-miss);
+      }
+
+      #combat-banner .sub {
+        margin-top: 4px;
+        font-size: 13px;
+        color: var(--hud-dim);
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+      }
+
+      /* Target status strip: where the opponent is and how it is doing.
+         A player firing at a stationary tank needs to know it exists, how far away it is, and how much
+         of it is left — without hunting for any of that. */
+      #hud-target {
+        right: 24px;
+        top: 24px;
+        background: var(--hud-bg);
+        border-right: 3px solid #c96a4a;
+        padding: 9px 14px 11px;
+        min-width: 190px;
+        text-align: right;
+      }
+
+      #hud-target .target-name {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #e08a68;
+        font-weight: 700;
+      }
+
+      #hud-target .target-hp {
+        font-size: 26px;
+        line-height: 1.15;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #hud-target .target-hp .max {
+        font-size: 13px;
+        color: var(--hud-dim);
+      }
+
+      /* Hit-point bar. Proportional rather than numeric alone, so "nearly dead" is obvious at a
+         glance — the number alone makes 40/700 and 400/700 look similarly alarming. */
+      #target-hp-bar {
+        margin-top: 6px;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.13);
+        overflow: hidden;
+      }
+
+      #target-hp-fill {
+        height: 100%;
+        width: 100%;
+        background: #7ddc6a;
+        transition: width 220ms ease;
+      }
+
+      #target-hp-fill.hurt {
+        background: #e8c33d;
+      }
+      #target-hp-fill.critical {
+        background: #e8563d;
+      }
+
+      #hud-target .target-range {
+        margin-top: 5px;
+        font-size: 11px;
+        color: var(--hud-dim);
+        font-variant-numeric: tabular-nums;
+      }
+
+      #hud-target.destroyed {
+        border-right-color: #6b6b6b;
+        opacity: 0.85;
+      }
+
+      #hud-target.destroyed .target-name {
+        color: #9a9a9a;
+      }
+
+      /* Debug toggle. Bottom-left, tucked under the speed panel rather than in the right-hand column.
+         The right side already carries the aim readout, the hit panel, and the target status; adding a
+         fourth element there made the toggle sit directly on top of the aim range. */
+      #debug-toggle {
+        left: 24px;
+        bottom: 24px;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--hud-dim);
+        background: var(--hud-bg);
+        padding: 5px 10px;
+        pointer-events: auto;
+        cursor: pointer;
+      }
+
+      #debug-toggle.active {
+        color: var(--hud-accent);
+      }
+
+      /* The armour arithmetic. Deliberately the smallest, dimmest text in the HUD. */
+      #hit-math {
+        font-size: 10px;
+        color: var(--hud-dim);
+        opacity: 0.75;
+      }
+
+      #hit-math.hidden {
+        display: none;
+      }
+
+      #hit-detail {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--hud-dim);
+      }
+
+      #hit-damage {
+        font-size: 13px;
+        color: var(--hud-fg);
+      }
+
+      /* First-launch banner. Bottom-centred, where nothing else lives, so it cannot cover the target
+         or the gunnery readouts the player is about to need. Dismisses on first movement. */
+      #hud-briefing {
+        left: 50%;
+        bottom: 88px;
+        transform: translateX(-50%);
+        background: var(--hud-bg);
+        border-top: 2px solid var(--hud-accent);
+        padding: 12px 22px 14px;
+        max-width: 460px;
+        text-align: center;
+        line-height: 1.8;
+        font-size: 12px;
+        color: var(--hud-fg);
+        transition: opacity 500ms ease;
+      }
+
+      #hud-briefing .brief-title {
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        color: var(--hud-accent);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+
+      #hud-briefing.hidden {
+        opacity: 0;
+      }
     </style>
   </head>
   <body>
@@ -325,11 +522,34 @@
 
     <div class="hud" id="reticle"></div>
 
+    <!-- Combat outcome banner: appears where the player is already looking when a shot resolves. -->
+    <div class="hud" id="combat-banner">
+      <div class="verdict" id="combat-verdict">—</div>
+      <div class="sub" id="combat-sub"></div>
+    </div>
+
+    <!-- Target status: identity, condition, and range. Answers "where is it and how is it doing?" -->
+    <div class="hud hidden" id="hud-target">
+      <div class="target-name" id="target-name">Target Tank</div>
+      <div class="target-hp"><span id="target-hp">700</span> <span class="max" id="target-hp-max">/ 700</span></div>
+      <div id="target-hp-bar"><div id="target-hp-fill"></div></div>
+      <div class="target-range" id="target-range">— m</div>
+    </div>
+
+    <!-- First-launch briefing. Two lines, dismissed on first input: enough to start, not a tutorial. -->
+    <div class="hud" id="hud-briefing">
+      <div class="brief-title">FIRING RANGE</div>
+      Drive to the red tank ahead and shoot it. Front and side armour will stop your shell — work
+      around to the rear or the flanks.
+    </div>
+
     <div class="hud" id="hud-hint">
       <b>W</b>/<b>S</b> drive &nbsp;&middot;&nbsp; <b>A</b>/<b>D</b> rotate hull &nbsp;&middot;&nbsp;
       <b>Mouse</b> aim turret &nbsp;&middot;&nbsp; <b>LMB</b> fire &nbsp;&middot;&nbsp;
-      <b>Wheel</b> zoom &nbsp;&middot;&nbsp; <b>Esc</b> release cursor
+      <b>Wheel</b> zoom &nbsp;&middot;&nbsp; <b>F</b> diagnostics &nbsp;&middot;&nbsp; <b>Esc</b> release cursor
     </div>
+
+    <div class="hud active" id="debug-toggle">Diagnostics</div>
 
     <div class="hud" id="hud-status">Click to capture mouse</div>
 

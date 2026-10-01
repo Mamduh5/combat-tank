@@ -83,8 +83,17 @@ export function buildTerrainGrid(terrain: Terrain, cells = TERRAIN_GRID_CELLS): 
     }
   }
 
-  // Two triangles per cell. Wound so the face normals point upward, which matters for both the
-  // renderer's lighting and the physics engine's ray-cast normals.
+  // Two triangles per cell. Wound so the computed face normals point **upward**, which is what the
+  // lighting and the physics engine's ray-cast normals depend on.
+  //
+  // This winding is the one a right-handed cross product calls upward-facing, which means Babylon's
+  // default renderer treats these faces as back faces and culls them — the ground then disappears and
+  // the player sees the tank floating in a void. The render side is corrected in `scene.ts` by setting
+  // the terrain material's `sideOrientation`, which is the honest place for it: the geometry and the
+  // normals stay in the conventional orientation, and only the renderer is told to flip.
+  //
+  // Regression-tested by `tests/core/terrain-grid.test.ts`, which asserts the normals point up, and by
+  // `tests/client/terrain-material.test.ts`, which asserts the material presents them front-facing.
   const indices = new Uint32Array(cells * cells * 6);
   let t = 0;
   for (let row = 0; row < cells; row += 1) {

@@ -11,6 +11,9 @@ areas**, **validation criteria**, and what is **explicitly deferred**.
   is done when its validation criteria pass.
 - **Every version must leave the project runnable.** If a version cannot be started and played, it
   is not finished.
+- **Passing the validation criteria is the minimum, not the goal.** Within a version's scope, aim for
+  the most coherent and playable result the current systems allow. Scope defines *what* to build; it
+  does not license building it as cheaply as possible. See ADR-0013.
 - **The order is binding.** `docs/gameplay-systems.md` §13 shows the real technical dependencies.
   Reordering versions invalidates work.
 - **Deferred lists are not a backlog of promises.** They say "not yet", not "eventually, quietly".
@@ -273,6 +276,60 @@ human playtest.
   readability.
 
 - **Depends on:** V2 (ballistics, impact resolution, vehicle definitions).
+
+---
+
+## V3R — Playable Prototype Quality Pass
+
+**Status: complete.** Not a new feature version. A refinement pass over V1–V3, prompted by the owner
+playing the result and finding it read as an engine test rather than a tank game.
+
+**Goal:** make the existing game present itself as a coherent tank-combat prototype, without adding
+any V4 systems.
+
+**Scope discipline:** no AI, no battle flow, no moving opponents, no return fire, no spotting, no
+victory logic. V1–V3 systems were reused, not replaced.
+
+### Defects found by playing, which every automated gate had passed
+
+- **The terrain was invisible.** Every ground triangle was wound so the renderer classified it as a
+  back face and culled it; the player saw the tank floating in a void with slivers of landscape on
+  the horizon. The *normals* were correct, so no geometry test could catch it. Fixed in the renderer
+  (`sideOrientation`) with the geometry left conventional, and pinned by
+  `tests/core/terrain-grid.test.ts`.
+- **The target was unreachable and invisible.** Placed 60 m ahead at the player's own height, it ended
+  up 12.6 m below the player on a valley floor behind a hill. Now placed by a scored search requiring
+  line of sight, similar elevation, and driveable ground. Pinned by `tests/core/spawn-placement.test.ts`.
+- **The player spawned on a ridge crest.** The spawn scan optimised for locally flat ground, which is
+  satisfied by the top of a cliff. Now optimises for consistent surroundings.
+- **The camera sat level with the hull**, so the player's own vehicle occluded the aim point.
+- **The turret was buried inside the hull** — it was placed at the gun trunnion height (1.42 m) rather
+  than the hull roof (1.77 m).
+- **The gun was invisible**: a 4.2 m barrel rendered 18 cm thick, hidden inside the turret block.
+- **The barrel's bounding box lay on the wrong axis**, which is why it never appeared where expected.
+- **On flat terrain the target was placed 63° off-axis**, because every candidate scored identically
+  and the first sampled won.
+- **`Math.hypot` in core code** — a determinism violation (ADR-0005), caught by the existing lint rule.
+
+### Improvements delivered
+
+- **Environment:** sky gradient dome, distance haze, height-banded terrain colour, range markers at
+  50/100/150 m, a proving-ground identity.
+- **Vehicles:** sloped glacis hull, visible road wheels, fenders, a readable gun with a muzzle swell,
+  lighter higher-contrast palette, and a distinct accent colour for the target so the player can tell
+  the two vehicles apart at range.
+- **Camera:** raised target height, increased distance, steeper default pitch.
+- **HUD:** a centred, colour-coded outcome banner (PENETRATED / BLOCKED / RICOCHET / MISS) with the
+  verdict where the player was already looking; a target status strip with a proportional HP bar and
+  range; armour arithmetic demoted to a diagnostics row toggled with **F**; layout collisions fixed.
+- **First launch:** a short briefing naming the objective, dismissed on first movement.
+
+### Known limitations after V3R
+
+- The hull wedge is custom geometry; no compound slopes or turret mantlet.
+- No impact debris or dust — impacts are marked, not dramatised.
+- Aiming is camera-relative with a centre reticle; no separate desired-vs-actual gun indicator.
+- Feel (movement weight, servo rates) still needs a human at the keyboard.
 
 ---
 

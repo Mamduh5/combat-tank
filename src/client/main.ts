@@ -4,10 +4,12 @@ import { reloadProgress } from '../core/vehicle/main-gun.js';
 import { PLACEHOLDER_TANK } from '../shared/placeholder-tank.js';
 import { TARGET_TANK } from '../shared/placeholder-target.js';
 import type { Vec3 } from '../shared/vec3.js';
+import { makeInput } from '../shared/input.js';
 import { OrbitCamera } from './camera/orbit-camera.js';
 import { InputManager } from './input/input-manager.js';
 import { PhysicsWorld } from './physics/rapier-terrain.js';
 import { createScene } from './render/scene.js';
+import { TARGET_ACCENT } from './render/tank-proportions.js';
 import { ShellEffects } from './render/shell-effects.js';
 import { TankVisual } from './render/tank-visual.js';
 import { Hud } from './ui/hud.js';
@@ -76,15 +78,24 @@ async function bootstrap(): Promise<void> {
 
   // The stationary test target, drawn from the same visual code as the player's tank, so a change to
   // the placeholder model applies to both and nothing about rendering the target is special-cased.
+  // The one difference is the accent colour: two identical olive tanks on an olive field left the
+  // player unable to tell which vehicle was theirs at combat range.
   const targetVisual =
     simulation.target === null
       ? null
-      : new TankVisual(scene, simulation.target.definition);
+      : new TankVisual(scene, simulation.target.definition, TARGET_ACCENT);
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
     hud.setStatus(locked ? '' : 'Click to capture mouse');
   });
+
+  // Synthetic input override, used by the screenshot harness to exercise firing without a pointer
+  // lock. Absent in normal play: `inputFrame` is null and the real input manager is read as usual.
+  // Exposed deliberately — without it, the combat feedback path can only be verified by hand with a
+  // captured pointer, which is exactly the kind of thing that goes untested.
+  let inputFrame: { throttle: number; steer: number; aim: { x: number; y: number; z: number }; fire: boolean } | null =
+    null;
 
   // Clicking the canvas captures the mouse, which is what makes mouse-look work. Firing is bound to
   // holding the left button and is handled in InputManager, so the click that grabs the mouse does
@@ -98,6 +109,13 @@ async function bootstrap(): Promise<void> {
   let distanceDrivenM = 0;
   let lastPosition = simulation.vehicle.state.position;
   let shotsFiredLastFrame = 0;
+  /**
+   * Simulation tick the centred outcome banner last fired on.
+   *
+   * Tracked so the banner appears once per resolved shot rather than on every frame the result is
+   * still present in the simulation's combat log.
+   */
+  let lastBannerTick = -1;
 
   engine.runRenderLoop(() => {
     // 1. Real elapsed time, clamped so a stall cannot teleport the vehicle.
@@ -111,8 +129,12 @@ async function bootstrap(): Promise<void> {
     const aim = resolveAimPoint(physics, camera.position, camera.getTarget());
     const aimRangeM = aim === null ? null : distanceBetween(camera.position, aim);
 
-    // 3. Input -> a single command for this frame.
-    const command = input.readDrivingInput(deltaSeconds, aim);
+    // 3. Input -> a single command for this frame. The synthetic override, when present, replaces the
+    //    real input manager entirely so the harness exercises the same downstream path a player does.
+    const command =
+      inputFrame === null
+        ? input.readDrivingInput(deltaSeconds, aim)
+        : makeInput(inputFrame.throttle, inputFrame.steer, inputFrame.aim, inputFrame.fire);
 
     // 4. Advance the simulation in whole fixed ticks, then refresh the physics queries.
     simulation.advance(deltaSeconds, command);
@@ -163,6 +185,10 @@ async function bootstrap(): Promise<void> {
 
     // 8. Hit feedback, from the most recent combat outcome. Only rewritten when a shell actually
     //    resolved, so the panel keeps showing the last shot rather than flickering every frame.
+    //
+    //    The last resolved tick is tracked so the centred banner fires **once per shot**. Without it
+    //    the banner re-triggers on every frame the result is still present in `simulation.combat`,
+    //    which pins it permanently on screen instead of flashing for a moment.
     if (simulation.combat.length > 0) {
       const outcome = simulation.combat[simulation.combat.length - 1]!;
       hud.updateHitFeedback(
@@ -170,9 +196,45 @@ async function bootstrap(): Promise<void> {
         simulation.target?.damage.hitPoints ?? 0,
         outcome.kind === 'penetrated' ? outcome.damage.modulesDestroyed : [],
       );
+
+      if (lastBannerTick !== simulation.tickCount) {
+        lastBannerTick = simulation.tickCount;
+        // The armour-miss case carries neither plate nor damage, so it is handled separately rather
+        // than through a nested conditional that would not preserve the discriminant narrowing.
+        if (outcome.kind === 'armour-miss') {
+          hud.showCombatBanner('MISS', 'miss', '');
+        } else {
+          const verdict =
+            outcome.kind === 'ricocheted' ? 'RICOCHET' : outcome.kind.toUpperCase();
+          const sub =
+            outcome.kind === 'penetrated'
+              ? `−${outcome.damage.vehicleDamage} HP · ${outcome.plate.definition.region}`
+              : outcome.plate.definition.region;
+          hud.showCombatBanner(verdict, outcome.kind, sub);
+        }
+      }
     }
 
-    // Accumulate distance driven, and retire the control hint once the player is moving.
+    // 9. Target status strip. Updated every frame rather than on change, because the range readout is
+    //    continuous — the player watches it shrink as they close, which is the cue for when to shoot.
+    if (simulation.target !== null) {
+      const t = simulation.target;
+      const dx = t.state.position.x - state.position.x;
+      const dz = t.state.position.z - state.position.z;
+      hud.updateTargetStatus({
+        name: t.definition.displayName,
+        hp: t.damage.hitPoints,
+        maxHp: t.definition.survivability.hitPoints,
+        rangeM: Math.hypot(dx, dz),
+        destroyed: t.damage.destroyed,
+      });
+    } else {
+      hud.updateTargetStatus(null);
+    }
+
+    hud.tick(deltaSeconds);
+
+    // Accumulate distance driven, and retire the first-launch guidance once the player is moving.
     distanceDrivenM += Math.hypot(
       state.position.x - lastPosition.x,
       state.position.z - lastPosition.z,
@@ -180,6 +242,7 @@ async function bootstrap(): Promise<void> {
     lastPosition = state.position;
     if (distanceDrivenM > HINT_HIDE_DISTANCE_M) {
       hud.hideHint();
+      hud.hideBriefing();
     }
 
     input.endFrame();
@@ -191,9 +254,38 @@ async function bootstrap(): Promise<void> {
     engine.resize();
   });
 
+  // Diagnostics toggle. Bound here rather than in the input system because it is a developer
+  // affordance for inspecting the armour model, not a gameplay input, and it must work whether or
+  // not the pointer is locked.
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'f' || event.key === 'F') {
+      hud.toggleDebug();
+    }
+  });
+
+  // The on-screen toggle is a convenience for anyone without the keyboard shortcut to hand.
+  document.getElementById('debug-toggle')?.addEventListener('click', () => hud.toggleDebug());
+
   // Expose the pieces for debugging from the browser console. Read-only by convention: mutating
-  // simulation state from here would bypass the input interface the core is designed around.
-  Object.assign(globalThis, { __combatTank: { simulation, physics, orbitCamera, input, hud } });
+  // simulation state from here would bypass the input interface the core is designed around. `scene`
+  // is included because visual problems are almost always diagnosed by inspecting the graph — which
+  // meshes exist, where they are, whether anything is enabled.
+  Object.assign(globalThis, {
+    __combatTank: {
+      simulation,
+      physics,
+      orbitCamera,
+      input,
+      hud,
+      scene,
+      tankVisual,
+      targetVisual,
+      /** Lets the screenshot harness drive the game without a captured pointer. */
+      setInputFrame: (frame: typeof inputFrame) => {
+        inputFrame = frame;
+      },
+    },
+  });
 
   hud.setStatus('');
 }

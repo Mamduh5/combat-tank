@@ -122,13 +122,21 @@ describe('through the simulation', () => {
     const sim = simWithTarget();
     const target = sim.target!;
 
+    // The target's starting position, captured because "the target stays put" is the real property
+    // under test. It was previously asserted as `x ≈ 0`, which held only while the target happened to
+    // be placed straight ahead of a spawn at the origin — an accident of placement rather than a
+    // property of the system. Target placement is now chosen by search, so this follows the actual
+    // start position instead of a coordinate that placement no longer guarantees.
+    const targetStart = { ...target.state.position };
+
     // Drive forward and curve left, putting the player off the target's flank, where the shell can
     // penetrate. The assertion is on the *player's* position: the target must stay put.
     for (let i = 0; i < 300; i += 1) {
       sim.tick(makeInput(1, -0.4, vec3(0, 0, 60), false));
     }
-    expect(Math.abs(sim.vehicle.state.position.x)).toBeGreaterThan(3);
-    expect(target.state.position.x).toBeCloseTo(0, 9);
+    expect(Math.abs(sim.vehicle.state.position.x - targetStart.x)).toBeGreaterThan(3);
+    expect(target.state.position.x).toBeCloseTo(targetStart.x, 9);
+    expect(target.state.position.z).toBeCloseTo(targetStart.z, 9);
 
     // Aim at the near flank plate of the target, at its own height.
     const flank = vec3(target.state.position.x + 1.3, 0.6, target.state.position.z);

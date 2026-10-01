@@ -139,9 +139,70 @@ that a particular internal function was called.
 **Do not weaken a test to make it pass.** A failing test is information. Fix the code, or record
 that the expectation was wrong and why.
 
+### Automated gates are necessary but not sufficient
+
+`npm run verify` passing means the code is *sound*. It says nothing about whether the game is
+*playable*.
+
+This is not a theoretical concern. At the end of V3 every gate passed — typecheck, lint, 253 tests,
+production build — while the game was visibly broken. The terrain was **entirely invisible**: every
+ground triangle was wound so the renderer treated it as a back face and culled it, and the player saw
+the tank floating in a void. The normals were *correct*, so no test inspecting geometry could have
+caught it.
+
+**Presentation work must be verified by looking at the running game.** Use `tools/shot.mjs` (see
+`tools/README.md`) to render the build and capture a screenshot. Where a visual defect corresponds to
+a testable property — winding, facing, placement, visibility — add a regression test so it cannot
+return silently.
+
+If your environment cannot render the game, **say so explicitly in your report** rather than claiming
+visual quality was verified. An unverified claim is worse than a stated limitation.
+
 ---
 
-## 6. Not prematurely implementing the future
+## 6. Effort level within a version's scope
+
+> **Version requirements define the feature boundary, not the desired effort level.** (ADR-0013)
+
+Within the scope of a version, optimise for the quality of the player's experience, not for the
+smallest implementation that technically satisfies the requirements.
+
+This is a standing rule for all versions, not a one-off.
+
+### What it means in practice
+
+- **Scope boundaries still hold.** Do not add systems belonging to a later version. V3R added no AI,
+  no battle flow, no new systems.
+- **Effort within that scope is not minimised.** A version is done when the current version is as
+  coherent, readable, intentional, and enjoyable as reasonably possible with what exists at this stage.
+- **A placeholder must be a good placeholder.** It need not be a final asset, but it must communicate
+  what the final asset will be. A box on two boxes is not an acceptable tank; a wedge hull with a
+  visible gun, road wheels, and fenders is, and costs barely more.
+- **Integration, presentation, usability, feel, and player comprehension are part of "done."** They
+  are not polish for a later version.
+
+### How to read scope language
+
+These phrases mean **"do not spend effort on production assets yet"**:
+
+- placeholder art is acceptable
+- primitive geometry is acceptable
+- final polish is deferred
+- debug feedback is acceptable
+
+They do **not** mean **"do the least work that passes the check."** Both readings fit the same sentence;
+only one produces a playable game. When a requirement says "placeholder", read it as *a good
+placeholder*, and ask what the player must be able to understand from it.
+
+### Why this rule exists
+
+V1 to V3 each satisfied their written criteria while producing something that looked like an engine
+test. The requirement phrasing above was read as *minimum effort*, and the result was a tank with no
+visible gun floating in a sky. ADR-0013 records this in full.
+
+---
+
+## 7. Not prematurely implementing the future
 
 This is the failure mode the project is most exposed to, because the future is genuinely tempting.
 
@@ -166,7 +227,7 @@ have probably built it too early.
 
 ---
 
-## 7. Reporting completed work
+## 8. Reporting completed work
 
 Every agent ends its work with a report. Keep it factual and short. Include:
 
@@ -188,15 +249,18 @@ useful than a confident overstatement, because the next agent — and the owner 
 
 ---
 
-## 8. Quick checklist
+## 9. Quick checklist
 
 Before finishing any change:
 
 - [ ] Work stayed inside the current version's scope.
 - [ ] Nothing on the version's "explicitly deferred" list was implemented.
+- [ ] Effort within that scope was **not** minimised — the current version is as coherent and playable as it can be (ADR-0013).
+- [ ] Placeholders are *good* placeholders: a viewer can tell what they represent and where things are.
 - [ ] `src/core` imports no rendering, network, or platform code, and uses no `Math.random()`.
 - [ ] New core logic has unit tests; new systems have a headless test where practical.
 - [ ] `npm run verify` passes.
+- [ ] **The running game was looked at.** Presentation was verified by rendering, not by reading the drawing code (`tools/shot.mjs`), or the limitation was stated explicitly.
 - [ ] The game still starts and previous behaviour still works.
 - [ ] New terms were added to the glossary; new constraints to an ADR.
 - [ ] Assumptions were recorded in `docs/assumptions.md`.

@@ -47,6 +47,7 @@ Files are named `NNNN-short-slug.md`, numbered sequentially from `0001`, and use
 | [0010](0010-analytic-ballistics-without-drag.md) | Shells are point masses under constant gravity, sub-stepped, with no drag | Accepted | 2026-10-01 | V3 — revisit when penetration exists |
 | [0011](0011-turret-is-a-servo-on-an-aim-point.md) | Turret servos toward a world aim point; rate limits live in vehicle data | Accepted | 2026-10-01 | V9 — revisit for client prediction |
 | [0012](0012-closed-form-armour-and-penetration.md) | Armour as oriented slabs; deterministic three-step penetration model | Accepted | 2026-10-01 | V4 — revisit when dispersion arrives |
+| [0013](0013-versions-define-scope-not-effort.md) | **Version requirements define scope, not effort level** | Accepted | 2026-10-01 | Standing — applies to every version |
 
 ADR-0007, ADR-0008 and ADR-0009 were written during **V1 implementation** and record engineering
 decisions made on evidence rather than waiting for owner approval, per the delegation of technical
@@ -80,6 +81,23 @@ values rather than snapshots of whatever the code happened to produce.
 > authority). That one depends on whether cross-machine determinism proves achievable, which is a V9
 > question with real consequences for how the game feels. It will get its own ADR when the V9
 > determinism test answers it.
+
+**ADR-0013 was written during the V3R playability pass** and is the most consequential entry in this
+index, because it changes how every future version is *approached* rather than how it is architected.
+
+V1 to V3 each met their acceptance criteria while the game was, to a player, broken: the terrain was
+invisible due to an inverted triangle winding, the camera sat level with the hull, the test target was
+buried 12.6 m below the player and out of sight, and the vehicles were boxes with no visible gun. Every
+automated gate passed throughout, because a winding error produces correct normals and is invisible to
+any test that inspects geometry rather than pixels.
+
+The requirement phrases that permitted this — "placeholder art is acceptable", "debug feedback is
+acceptable", "implement the minimum coherent system" — were read as *do the least work that passes the
+check*. ADR-0013 states the intended reading: **a placeholder must still be a good placeholder, and a
+prototype must still communicate the intended game.** Future agents should treat integration,
+presentation, usability, feel, and player comprehension as part of completing a feature, and should
+expect to verify presentation work by looking at the running game rather than by reading the code that
+draws it.
 
 ### What each ADR settles
 

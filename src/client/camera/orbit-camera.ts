@@ -23,17 +23,28 @@ import type { PhysicsWorld } from '../physics/rapier-terrain.js';
  */
 export const CAMERA_TUNING = {
   /** Default distance behind the vehicle, metres. */
-  defaultDistanceM: 13,
+  defaultDistanceM: 17,
   /** Closest the camera may be pulled in by obstruction, metres. */
-  minDistanceM: 3.2,
+  minDistanceM: 4.5,
   /** Furthest the player may zoom out, metres. */
-  maxDistanceM: 34,
-  /** Metres the camera target sits above the vehicle origin. */
-  targetHeightM: 2.4,
-  /** Initial downward tilt, radians. Positive looks down. */
-  initialPitchRad: 0.32,
+  maxDistanceM: 40,
+  /**
+   * Metres the camera target sits above the vehicle origin.
+   *
+   * Aimed at the turret roof rather than the hull floor. Pointing at the floor put the camera nearly
+   * level with the tracks, so the vehicle read as a slab and its own hull occluded the ground the
+   * player was aiming at.
+   */
+  targetHeightM: 3.1,
+  /**
+   * Initial downward tilt, radians. Positive looks down.
+   *
+   * Raised from 0.32 to 0.42 so the default view looks over the vehicle and shows the ground the player
+   * is aiming at, instead of staring at the tank's rear deck with the horizon above it.
+   */
+  initialPitchRad: 0.42,
   /** Vertical look limits, radians. Prevents flipping over the top. */
-  minPitchRad: -0.25,
+  minPitchRad: -0.2,
   maxPitchRad: 1.25,
   /** How quickly the camera position chases its target, in units of 1/second. */
   followStiffness: 14,
