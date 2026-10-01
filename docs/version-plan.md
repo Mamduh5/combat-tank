@@ -138,6 +138,9 @@ thing automated checks cannot do, and is listed in the V1 report as outstanding.
 
 ## V2 — Turret, Gun & Ballistics
 
+**Status:** Implemented. Automated validation passes (172 tests). Subjective feel and visuals await
+human playtest.
+
 **Goal:** prove the gunnery loop — aim, fire, and watch a shell travel and land.
 
 - **Player-visible result:** the player rotates the turret independently of the hull, elevates and
@@ -145,34 +148,60 @@ thing automated checks cannot do, and is listed in the V1 report as outstanding.
   the ground. A reticle and range readout appear.
 
 - **Systems introduced**
-  - `src/core/vehicle` — turret traverse and gun elevation, both rate-limited and distinct.
-  - `src/core/ballistics` — shell entities with muzzle velocity, gravity, per-tick integration, and
-    lifetime.
-  - `src/core/sim` — collision queries via Rapier ray/shape casts for shell impact.
-  - `src/shared/vehicle-defs` — gun parameters: calibre, reload time, muzzle velocity, elevation and
-    depression limits, turret traverse rate.
-  - `src/client/ui` — aiming reticle, range to aim point, reload indicator.
-  - `src/client/render` — gun barrel, tracer, and impact effect placeholders.
-  - Reload cycle in the core (firing is refused while reloading).
+  - `src/core/vehicle/turret.ts` — turret traverse and gun elevation, both rate-limited and distinct.
+  - `src/core/vehicle/main-gun.ts` — load state and the reload cycle; the core refuses a fire request.
+  - `src/core/ballistics/shell.ts` — shell state, sub-stepped integration under gravity, lifetime.
+  - `src/core/ballistics/impact.ts` — the V2→V3 impact contract.
+  - `src/core/ballistics/flight-system.ts` — owns shells in flight, collects impacts.
+  - `src/shared/vehicle-definition.ts` — turret, main gun and test shell parameters.
+  - `src/shared/input.ts` — `aimPoint` and `fire` added to `InputCommand`.
+  - `src/client/render/tank-visual.ts` — turret and barrel as separate transform nodes.
+  - `src/client/render/shell-effects.ts` — shell, muzzle flash and impact marker placeholders.
+  - `src/client/ui/hud.ts` — gun state, reload countdown and progress bar, turret offset.
 
-- **Work areas**
-  - Establish the impact data contract: an impact must produce a position, a surface normal, and an
-    impact angle, because V3 depends on it. Define the type now even though V3 consumes it.
-  - Choose and record units and conventions (millimetres for armour and penetration, metres for
-    distance, seconds for time) in the glossary.
+- **What actually shipped, and where it differs from the plan above**
+  - Shell collision uses the **analytic terrain**, not Rapier casts. Rapier is reserved for vehicle
+    queries. Rationale in [ADR-0010](decisions/0010-analytic-ballistics-without-drag.md); this also
+    strengthened rather than changed [ADR-0007](decisions/0007-kinematic-tank-locomotion.md).
+  - The plan named `src/shared/vehicle-defs` (plural directory). The existing single
+    `src/shared/vehicle-definition.ts` was extended instead, matching the V1 convention.
+  - **No calibre field.** The owner asked not to introduce abstractions for ammunition no version
+    needs, so there is one generic test shell and no calibre/armour-type taxonomy.
+  - `Vec3` moved from `src/core/math/vec3.ts` to `src/shared/vec3.ts`, because `InputCommand` now
+    carries an aim point and both the core and the shells must read it. One definition avoids two
+    structurally identical types that are not assignable to each other; the dependency direction
+    (core → shared) is unchanged.
+
+- **Work areas completed**
+  - Impact data contract defined: position, surface normal, incoming direction, impact velocity, and a
+    precomputed incidence angle. A test asserts the record has **not** grown a damage field, so the
+    V2/V3 boundary stays visible.
+  - Units and conventions recorded in the glossary.
 
 - **Validation**
-  - Unit tests for ballistics: a fired shell travels for a non-zero time of flight; a long-range shot
-    requires aiming above the target; a stationary shot at close range behaves predictably.
-  - A unit test asserts the gun cannot be fired during reload, and that reload duration matches the
-    vehicle definition.
-  - A unit test asserts turret traverse and hull traverse are independent: rotating the hull does not
-    rotate the turret.
-  - A unit test asserts the gun respects elevation and depression limits.
-  - Manual: the player can track a target, fire, watch the shell miss short, adjust, and hit.
+  - `tests/core/turret.test.ts` (19) — traverse does not snap, respects rate and arc limits; elevation
+    and depression clamp; hull rotation carries the turret without changing its local angle; a fixed
+    world aim point is re-served when the hull turns under it; a turret slower than the hull visibly
+    lags.
+  - `tests/core/ballistics.test.ts` (22) — non-zero flight time; drop follows `0.5·g·t²`; flight time
+    and distance increase together; higher muzzle altitude means a longer shot; no tunnelling; range
+    and lifetime expiry; impact-contract completeness; identical launches give identical results.
+  - `tests/core/gun.test.ts` (15) — reload timing matches the definition; firing is refused while
+    reloading without resetting the timer; held fire is rate-limited to one shot per reload; shells
+    spawn at the muzzle along the barrel; end-to-end firing through `Simulation`.
+  - `tests/data/vehicle-definition.test.ts` (28) — V2 sections validate, and broken gun/turret/shell
+    data is rejected.
+  - Full suite: **172 passing across 9 files**; `npm run verify`, production build pass.
 
-- **Explicitly deferred:** penetration, ricochet, damage, hit points, destruction, AI, and any hit
-  feedback beyond "the shell hit something".
+- **Explicitly deferred, as instructed:** penetration, ricochet, damage, hit points, armour, module
+  damage, destruction, enemies, AI, spotting, multiplayer, progression, the ammunition roster (OD-04
+  remains open), and any polished VFX.
+
+- **Known limitations:** no aerodynamic drag (ADR-0010), so long shots fall slightly short of a real
+  shell; no self-hit or friendly-fire rules; the gunnery HUD readouts are placeholders.
+
+- **Pending human verification:** turret slew feel, gun elevation feel, whether the muzzle flash and
+  impact marker are readable, and whether the aim range readout is legible while moving.
 
 - **Depends on:** V1 (locomotion, camera, input, tick loop, vehicle definitions).
 

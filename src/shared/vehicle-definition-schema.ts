@@ -66,6 +66,39 @@ export function validateVehicleDefinition(
     requirePositive(ground, 'suspensionDamping', `${label}.ground`, errors);
   }
 
+  const turret = requireSection(definition, 'turret', errors);
+  if (turret) {
+    requirePositive(turret, 'traverseDegPerSec', `${label}.turret`, errors);
+    requirePositive(turret, 'traverseAccelDegPerSec2', `${label}.turret`, errors);
+    requirePositive(turret, 'ringHeightM', `${label}.turret`, errors);
+    // A traverse arc is an angle, so it may legitimately exceed 180, but it must stay below a full
+    // turn: 360 or more would make "the turret's limit" meaningless.
+    requireRange(turret, 'maxTraverseDeg', 0.1, 359, `${label}.turret`, errors);
+  }
+
+  const mainGun = requireSection(definition, 'mainGun', errors);
+  if (mainGun) {
+    requireRange(mainGun, 'maxElevationDeg', 0, 90, `${label}.mainGun`, errors);
+    requireRange(mainGun, 'maxDepressionDeg', 0, 90, `${label}.mainGun`, errors);
+    requirePositive(mainGun, 'elevateRateDegPerSec', `${label}.mainGun`, errors);
+    requirePositive(mainGun, 'barrelLengthM', `${label}.mainGun`, errors);
+    // A zero reload would make the gun a continuous-fire button, which is not what a main gun is.
+    requirePositive(mainGun, 'reloadSeconds', `${label}.mainGun`, errors);
+  }
+
+  const mainShell = requireSection(definition, 'mainShell', errors);
+  if (mainShell) {
+    requireString(mainShell, 'id', errors);
+    requireString(mainShell, 'displayName', errors);
+    requirePositive(mainShell, 'muzzleVelocityMps', `${label}.mainShell`, errors);
+    requirePositive(mainShell, 'massKg', `${label}.mainShell`, errors);
+    requirePositive(mainShell, 'maxRangeM', `${label}.mainShell`, errors);
+    requirePositive(mainShell, 'maxLifetimeSeconds', `${label}.mainShell`, errors);
+    // The sub-step size bounds how far a shell can pass through terrain undetected. A large value
+    // silently reintroduces tunnelling, so it is validated rather than trusted.
+    requireRange(mainShell, 'maxSubstepM', 0.05, 50, `${label}.mainShell`, errors);
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -146,5 +179,20 @@ function requireUnitInterval(
   const value = parent[key];
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
     errors.push(`${path}.${key}: expected a finite number in [0, 1]`);
+  }
+}
+
+/** Requires a finite number within an inclusive range. */
+function requireRange(
+  parent: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+  path: string,
+  errors: string[],
+): void {
+  const value = parent[key];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    errors.push(`${path}.${key}: expected a finite number in [${min}, ${max}]`);
   }
 }

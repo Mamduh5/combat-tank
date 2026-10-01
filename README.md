@@ -11,14 +11,26 @@ does not attempt to reproduce their content, branding, or exact mechanics.
 
 ## Project status
 
-> **Stage: V1 — Movement & Camera Sandbox. Complete (2026-10-01).**
-> The game launches. A placeholder tank can be driven on placeholder terrain with heavy,
-> mechanically-limited movement, and a third-person mouse-look camera follows it.
-> **V2 has not been started.**
+> **Stage: V2 — Turret, Gun & Ballistics. Implemented (2026-10-01).**
+> The tank now has a turret that traverses independently of the hull, a gun that elevates and
+> depresses within real limits, a reload cycle, and a **real travelling projectile** that arcs, drops,
+> and lands where you aimed. Automated validation passes (172 tests); subjective gunnery feel is
+> still awaiting human playtest.
+>
+> **V1** (movement and camera) is complete and unchanged. Its subjective feel items — tank movement
+> feel, camera feel, visual camera obstruction behaviour — are recorded as *pending product playtest*
+> and did not block V2.
+>
+> **V3 has not been started.**
 
-Current capabilities: forward and reverse driving, hull traverse with a rate limit, gradient
-resistance, a camera that pulls in when terrain blocks it, and a speed/traverse/aim-range HUD.
-There is no gun, no damage, no AI, and no multiplayer — those are later versions by design.
+Current capabilities: heavy rate-limited driving and hull traverse, an independent rate-limited turret
+with a traverse arc, a gun with elevation/depression limits and a reload cycle, shells with travel
+time and gravity drop, an impact record for the future armour systems, and a HUD showing gun state,
+reload progress, turret offset and aim range.
+
+There is **no armour, penetration, ricochet, damage, hit points, destruction, enemies, AI, or
+multiplayer** — those are later versions by design. V2 answers *where and how did the shell hit?*;
+V3 will answer *what does that hit do?*
 
 ---
 
@@ -39,12 +51,15 @@ Click the window to capture the mouse, then drive.
 | --- | --- |
 | `W` / `S` | Drive forward / reverse |
 | `A` / `D` | Rotate the hull |
-| Mouse | Look — moves the camera only, and never turns the tank |
+| Mouse | Aim the turret and camera — **never turns the hull** |
+| Left mouse button | Fire (the gun must be loaded) |
 | Mouse wheel | Zoom in / out |
 | `Esc` | Release the mouse cursor |
 
-Arrow keys mirror WASD. The camera and the hull are independent: you can look one way and face
-another, which is the control model settled for OD-02.
+Arrow keys mirror WASD. The camera, hull, and turret are three separate systems: you can look one way,
+drive another, and have the gun trained somewhere else entirely. The mouse aims the **turret**, which
+slews toward the point under the cursor at a limited rate rather than snapping to it — and if you spin
+the hull faster than the turret can traverse, the gun genuinely lags behind.
 
 ### Developer commands
 

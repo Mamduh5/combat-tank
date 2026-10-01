@@ -23,7 +23,24 @@ limits, and recoils when fired.
 
 **Hull traverse** — rotation of the hull itself, driven by the player.
 
-**Turret traverse** — rotation of the turret relative to the hull, driven by the player.
+**Turret traverse** — rotation of the turret relative to the hull. The turret's **world** heading is
+`hull heading + turret local angle`, so turning the hull carries the turret with it mechanically while
+its own local angle stays independent.
+
+**Traverse arc** — how far the turret may rotate relative to its hull before hitting a mechanical
+stop. Unlike traverse *rate*, it bounds where the turret can end up, not how fast it gets there.
+
+**Trunnion** — the pivot the gun elevates about, mounted on the turret. The gun's orientation is
+relative to it, and shells originate at the muzzle one barrel length along it.
+
+**Gun elevation / depression** — the barrel's vertical angle relative to the turret's horizontal plane,
+limited by the vehicle definition.
+
+**Fire request** — a player (or AI) *asking* to fire. Not a command: the core refuses it while the gun
+is reloading. See `InputCommand.fire`.
+
+**Reload** — the interval after firing during which the gun cannot fire again. Owned by the
+simulation core, not the client, so a shot can be refused authoritatively.
 
 **Track** — the running gear. A damaged track can immobilise or slow a vehicle **[later]**.
 
@@ -40,9 +57,28 @@ The exact class system is **not decided** — see `docs/open-decisions.md` (OD-0
 ## Ballistics & gunnery
 
 **Shell** — a physical projectile fired from a gun. Travels over time; not an instant hitscan.
+In V2 there is exactly one shell, the **test shell**, which is a placeholder and not an ammunition
+type.
+
+**Flight time** — the time between a shell leaving the muzzle and reaching its target. Non-zero by
+design: it is why leading a moving target matters.
+
+**Drop** — the vertical loss a shell accumulates during flight. At long range the player must aim above
+the target to compensate.
+
+**Impact record** — what V2 reports when a shell lands: position, surface normal, incoming direction,
+impact velocity, and incidence angle. It answers **where and how** a shell hit. It deliberately carries
+no penetration, ricochet or damage — that is V3's job to derive.
+
+**Incidence angle** — the angle between a shell's direction of travel and the surface normal at impact.
+**0° is a perpendicular hit; 90° is a grazing hit.** Computed from the *reversed* travel direction,
+which is the detail most easily got backwards.
 
 **Muzzle velocity** — the speed of a shell as it leaves the muzzle. Higher velocity means less
 drop over a given distance and generally less time on target.
+
+**Drag** — aerodynamic resistance slowing a shell in flight. **Not modelled in V2** (ADR-0010), so
+long shots fall slightly short of a real shell.
 
 **Penetration** — a shell's ability to defeat armor, expressed as a thickness in millimetres at
 normal incidence.

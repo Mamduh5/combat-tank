@@ -80,6 +80,61 @@
         font-weight: 700;
       }
 
+      /* --- Gunnery panel (V2) --- */
+      #hud-gun {
+        left: 24px;
+        bottom: 118px;
+        background: var(--hud-bg);
+        border-left: 3px solid var(--hud-accent);
+        padding: 8px 16px 10px;
+        min-width: 190px;
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      #hud-gun .gun-state {
+        color: var(--hud-accent);
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+
+      /* A reloading gun is the one state the player cannot infer from the vehicle, so it is tinted
+         rather than left to be read as text alone. */
+      #hud-gun .gun-state.reloading {
+        color: #e8a33d;
+      }
+
+      #hud-gun .gun-detail {
+        color: var(--hud-dim);
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      /* --- Reload progress bar --- */
+      #hud-reload-bar {
+        left: 24px;
+        bottom: 108px;
+        width: 190px;
+        height: 3px;
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      #hud-reload-bar .fill {
+        width: 0%;
+        height: 100%;
+        background: var(--hud-accent);
+        /* Width changes every frame while reloading; the transition keeps it from looking stepped. */
+        transition: width 60ms linear;
+      }
+
+      #hud-reload-bar .fill.reloading {
+        background: #e8a33d;
+      }
+
       #hud-aim {
         right: 24px;
         bottom: 24px;
@@ -187,6 +242,18 @@
       </div>
     </div>
 
+    <div class="hud" id="hud-gun">
+      <div class="gun-state" id="gun-value">GUN READY</div>
+      <div class="gun-detail">
+        <span id="turret-value">TURRET 0&deg;</span>
+        <span id="gun-range">--</span>
+      </div>
+    </div>
+
+    <div class="hud" id="hud-reload-bar">
+      <div class="fill" id="reload-fill"></div>
+    </div>
+
     <div class="hud" id="hud-aim">
       <div class="aim-range" id="aim-range">--</div>
       <div class="aim-label">Aim range (m)</div>
@@ -196,8 +263,8 @@
 
     <div class="hud" id="hud-hint">
       <b>W</b>/<b>S</b> drive &nbsp;&middot;&nbsp; <b>A</b>/<b>D</b> rotate hull &nbsp;&middot;&nbsp;
-      <b>Mouse</b> look &nbsp;&middot;&nbsp; <b>Wheel</b> zoom &nbsp;&middot;&nbsp; <b>Esc</b> release
-      cursor
+      <b>Mouse</b> aim turret &nbsp;&middot;&nbsp; <b>LMB</b> fire &nbsp;&middot;&nbsp;
+      <b>Wheel</b> zoom &nbsp;&middot;&nbsp; <b>Esc</b> release cursor
     </div>
 
     <div class="hud" id="hud-status">Click to capture mouse</div>

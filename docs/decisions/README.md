@@ -44,12 +44,28 @@ Files are named `NNNN-short-slug.md`, numbered sequentially from `0001`, and use
 | [0007](0007-kinematic-tank-locomotion.md) | Kinematic tank locomotion; Rapier for queries, not for driving | Accepted (settles OD-12) | 2026-10-01 | V2 |
 | [0008](0008-simulation-tick-rate.md) | Fixed 60 Hz simulation tick, independent of frame rate | Accepted | 2026-10-01 | **V9** — revisit for the network tick |
 | [0009](0009-shared-terrain-geometry.md) | Renderer and physics share one terrain mesh; collision uses a trimesh | Accepted | 2026-10-01 | V6 — revisit for authored maps |
+| [0010](0010-analytic-ballistics-without-drag.md) | Shells are point masses under constant gravity, sub-stepped, with no drag | Accepted | 2026-10-01 | V3 — revisit when penetration exists |
+| [0011](0011-turret-is-a-servo-on-an-aim-point.md) | Turret servos toward a world aim point; rate limits live in vehicle data | Accepted | 2026-10-01 | V9 — revisit for client prediction |
 
 ADR-0007, ADR-0008 and ADR-0009 were written during **V1 implementation** and record engineering
 decisions made on evidence rather than waiting for owner approval, per the delegation of technical
 authority. ADR-0001 to ADR-0006 remain proposals carried over from the V0 planning pass; the owner
 has since confirmed that ordinary engineering decisions are the implementing agent's to make, so they
 stand as accepted.
+
+**ADR-0010 and ADR-0011 were written during V2.** Two findings changed the plan rather than merely
+implementing it:
+
+- The turret rate limiter needed a **stopping limit** as well as a distance limit, because a distance
+  limit alone produces a visible oscillation as the turret overshoots and hunts back. This was found
+  by a test, and is the main reason V2's turret code is shaped the way it is.
+- V2 introduced a **second consumer of the analytic terrain height** (shell collision) besides the
+  vehicle. That strengthened the case for ADR-0007 rather than changing it, so ADR-0007's status is
+  unchanged and its review date stands.
+
+ADR-0010 records the **deliberate absence of aerodynamic drag**. That omission is a decision with a
+stated cost — long shots fall slightly short of a real shell — not an oversight, and V3 should revisit
+it when penetration depends on velocity at impact.
 
 > **Still undecided and therefore not recorded here:** OD-10 (client prediction vs. pure server
 > authority). That one depends on whether cross-machine determinism proves achievable, which is a V9

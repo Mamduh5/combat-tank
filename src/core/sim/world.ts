@@ -1,8 +1,10 @@
 import { NEUTRAL_INPUT, type InputCommand } from '../../shared/input.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
-import { vec3, cos, sin, type Vec3 } from '../math/index.js';
+import { cos, sin, vec3, type Vec3 } from '../math/index.js';
 import { Tank, type VehicleTelemetry } from '../vehicle/tank.js';
 import { Terrain, DEFAULT_TERRAIN_CONFIG, type TerrainConfig } from '../world/terrain.js';
+import { ShellFlightSystem } from '../ballistics/flight-system.js';
+import type { ShellImpact } from '../ballistics/impact.js';
 
 /**
  * The simulation core: terrain, vehicles, and the fixed-timestep loop that advances them.
@@ -33,6 +35,9 @@ export const TICK_DT_SECONDS = 1 / TICK_HZ;
  */
 const MAX_CATCHUP_TICKS = 5;
 
+/** Shared empty impact list, so the common "nothing hit" case allocates nothing. */
+const EMPTY_IMPACTS: readonly ShellImpact[] = Object.freeze([]);
+
 export interface SimulationOptions {
   readonly vehicle: VehicleDefinition;
   readonly spawn?: Vec3;
@@ -45,8 +50,22 @@ export class Simulation {
   readonly vehicle: Tank;
   readonly tickRateHz: number;
 
+  /** Every shell currently in flight. V2 has no friendly-fire or self-hit rules, so this is the whole story. */
+  readonly shells: ShellFlightSystem;
+
   /** Total fixed ticks executed since construction. A simulation clock in ticks, not seconds. */
-  private tickCount = 0;
+  /**
+   * Ticks executed since construction, as a simulation clock in ticks rather than seconds.
+   *
+   * Read-only, and deliberately a *tick* count rather than a wall-clock time: from V9 this is the
+   * authoritative simulation clock, and a consumer that could set it would be able to rewind or skip
+   * the world.
+   */
+  get tickCount(): number {
+    return this.tickCountInternal;
+  }
+
+  private tickCountInternal = 0;
   private accumulatorSeconds = 0;
   private readonly dtSeconds: number;
 
@@ -54,6 +73,7 @@ export class Simulation {
     this.terrain = new Terrain(options.terrain ?? DEFAULT_TERRAIN_CONFIG);
     this.tickRateHz = TICK_HZ;
     this.dtSeconds = TICK_DT_SECONDS;
+    this.shells = new ShellFlightSystem();
 
     const spawn = options.spawn ?? this.defaultSpawn();
     this.vehicle = new Tank(options.vehicle, {
@@ -94,10 +114,46 @@ export class Simulation {
     return ticks;
   }
 
-  /** Runs exactly one fixed tick. Exposed so tests can step deterministically. */
+  /**
+   * Runs exactly one fixed tick.
+   *
+   * The order matters: the vehicle is stepped first, so a shot accepted this tick leaves from the
+   * muzzle position the vehicle has *just* reached, and only then are the shells advanced. A shell
+   * therefore never starts a tick already part-way through its flight, and an impact reported this
+   * tick reflects a muzzle position no more than one tick old.
+   */
   tick(input: InputCommand = NEUTRAL_INPUT): void {
     this.vehicle.step(input, this.terrain, this.dtSeconds);
-    this.tickCount += 1;
+
+    // The gun has already decided whether the shot is allowed; anything it hands over is a shot
+    // that genuinely happened.
+    const shot = this.vehicle.takePendingShot();
+    if (shot !== null) {
+      this.shells.spawn(
+        this.vehicle.definition.mainShell,
+        shot.origin,
+        shot.direction,
+        this.vehicle.definition.id,
+      );
+    }
+
+    this.impactsThisTick = this.shells.step(
+      this.vehicle.definition.mainShell,
+      this.terrain,
+      this.dtSeconds,
+    );
+    this.tickCountInternal += 1;
+  }
+
+  private impactsThisTick: readonly ShellImpact[] = EMPTY_IMPACTS;
+
+  /**
+   * Impacts produced by the most recent `tick`, in the order they occurred.
+   *
+   * Cleared by every tick, so a consumer that reads it once per frame sees each impact exactly once.
+   */
+  get impacts(): readonly ShellImpact[] {
+    return this.impactsThisTick;
   }
 
   /** Runs `count` fixed ticks with a constant input. A convenience for tests and headless tools. */

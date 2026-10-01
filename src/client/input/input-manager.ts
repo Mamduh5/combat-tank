@@ -1,4 +1,5 @@
 import { makeInput, type InputCommand } from '../../shared/input.js';
+import type { Vec3 } from '../../shared/vec3.js';
 
 /**
  * Keyboard and mouse capture, converted into `InputCommand` values.
@@ -83,7 +84,25 @@ export class InputManager {
   /** Releasing focus must clear held keys, or the tank drives on forever after an alt-tab. */
   private readonly onBlur = (): void => {
     this.keys.clear();
+    this.firing = false;
   };
+
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    // Only the primary button fires. Without the check, a right-click to dismiss a context menu
+    // would also shoot.
+    if (event.button === 0) {
+      this.firing = true;
+    }
+  };
+
+  private readonly onMouseUp = (event: MouseEvent): void => {
+    if (event.button === 0) {
+      this.firing = false;
+    }
+  };
+
+  /** True while the primary mouse button is held down. */
+  private firing = false;
 
   private readonly onMouseMove = (event: MouseEvent): void => {
     // movementX/Y are unreliable when the cursor is not locked, so they are only used while the
@@ -112,7 +131,10 @@ export class InputManager {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
     window.addEventListener('mousemove', this.onMouseMove);
+    window.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
     target.addEventListener('wheel', this.onWheel, { passive: false });
+    target.addEventListener('contextmenu', preventContextMenu);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
@@ -132,8 +154,11 @@ export class InputManager {
    * Keyboard axes are smoothed toward their target rather than applied instantly, because a tank's
    * controls are not binary. The *simulation* still applies its own acceleration curve on top of
    * this, so the smoothing adds presentational weight rather than substituting for the core model.
+   *
+   * @param aimPoint world point the gun should train on, resolved from the camera's view ray by the
+   *   caller. `null` means "hold the current gun orientation".
    */
-  readDrivingInput(dtSeconds: number): InputCommand {
+  readDrivingInput(dtSeconds: number, aimPoint: Vec3 | null = null): InputCommand {
     const throttleTarget = axis(
       this.isDown('KeyW') || this.isDown('ArrowUp'),
       this.isDown('KeyS') || this.isDown('ArrowDown'),
@@ -156,7 +181,10 @@ export class InputManager {
       this.smoothedTurn = 0;
     }
 
-    return makeInput(this.smoothedThrottle, this.smoothedTurn);
+    // Aiming is a *continuous* input and is passed straight through, unsmoothed. The turret's own
+    // rate limit is the mechanism that makes the movement feel weighted; smoothing it here as well
+    // would only stack extra lag on a limit that already exists.
+    return makeInput(this.smoothedThrottle, this.smoothedTurn, aimPoint, this.firing);
   }
 
   /** Returns and clears the accumulated look delta, tying mouse input to frames. */
@@ -198,7 +226,10 @@ export class InputManager {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('mousemove', this.onMouseMove);
+    window.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
     this.target.removeEventListener('wheel', this.onWheel);
+    this.target.removeEventListener('contextmenu', preventContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
 }
@@ -209,5 +240,15 @@ function axis(positive: boolean, negative: boolean): number {
     return 0;
   }
   return positive ? 1 : -1;
+}
+
+/**
+ * Suppresses the browser context menu over the canvas.
+ *
+ * Right-click is not bound to anything, so the menu would only ever appear as an interruption in the
+ * middle of a mouse-look.
+ */
+function preventContextMenu(event: Event): void {
+  event.preventDefault();
 }
 

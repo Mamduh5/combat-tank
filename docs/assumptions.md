@@ -72,6 +72,21 @@ allowed* to do while production code is not.
 **Assumed:** a single generic shell for V2/V3, with the data model already parameterised per shell.
 **Why:** the owner's brief named shell types as examples, not commitments (OD-04).
 **Cost if wrong:** low, because types are data.
+**Status: HELD during V2, deliberately.** The owner confirmed in the V2 brief that OD-04 must *not* be
+forced. The shipped shell is named `test-ballistic` / "Test Ballistic Shell", and its data carries a
+`maxSubstepM` and a `massKg` that are engineering parameters rather than design commitments. A test
+asserts the id and display name stay generic, so a temporary value cannot quietly harden into a
+permanent taxonomy. Penetration, ricochet and shell-specific behaviour remain V3 work.
+
+## A-09 — V2 tuning values are engineering defaults, not balance
+**Assumed:** turret traverse rate, gun elevation/depression limits, elevation rate, reload duration and
+muzzle velocity are placeholders chosen to make the systems observable and testable.
+**Why:** the owner stated explicitly that V2 should not tune final vehicle balance, and that
+placeholder characteristics should be reasonable and stored in vehicle data.
+**Cost if wrong:** a tuning pass. Every one of these values lives in `src/shared/placeholder-tank.ts`
+as data, not as a constant in a system, so changing them is an edit to one file with no code change.
+**Status: assumption, not a decision.** Do not cite these numbers as design intent, and do not let a
+later version inherit them as defaults without re-checking them against the player's experience.
 
 ## A-09 — Track and engine are the first damageable modules
 **Assumed:** V3 implements those two, with the module system designed to accept more.

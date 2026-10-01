@@ -64,6 +64,55 @@ export const PLACEHOLDER_TANK: VehicleDefinition = {
     suspensionStiffness: 14,
     suspensionDamping: 11,
   },
+
+  turret: {
+    // Faster than the hull, because a turret ring is lighter than the vehicle it sits on — but
+    // still slow enough that a 90° swing takes real time. This is the number that most defines
+    // whether the gun feels like a mechanism or like a mouse cursor.
+    traverseDegPerSec: 32,
+    // ~0.7 s to reach full traverse, so there is a visible ramp rather than an instant start.
+    traverseAccelDegPerSec2: 45,
+    // A deliberately generous arc. The owner asked for placeholder traverse characteristics and
+    // explicitly said not to tune final balance yet, so this is wide enough not to surprise during
+    // evaluation. The real traverse arc is a balance question for a later version.
+    maxTraverseDeg: 200,
+    // Height of the ring above the hull floor, which places the gun in world space.
+    ringHeightM: 1.42,
+  },
+
+  mainGun: {
+    // Limited elevation and depression, so some positions genuinely cannot be shot and some
+    // targets can only be reached from a slope. Kept modest but real.
+    maxElevationDeg: 15,
+    maxDepressionDeg: 9,
+    // ~2.2 s to swing through the full elevation arc, which is slow enough to feel mechanical.
+    elevateRateDegPerSec: 11,
+    // A long barrel, so the muzzle is clearly ahead of the hull and the shell appears to leave the
+    // end of the gun rather than the middle of the tank.
+    barrelLengthM: 4.2,
+    // The tempo of the whole gunnery loop. Long enough that holding the trigger does nothing, short
+    // enough that a player in a duel is not left waiting. A test default, not a balance decision.
+    reloadSeconds: 4.5,
+  },
+
+  mainShell: {
+    // Explicitly a placeholder test shell, not an ammunition type. See the note on
+    // `TestShellDefinition` and OD-04.
+    id: 'test-ballistic',
+    displayName: 'Test Ballistic Shell',
+    // Fast enough that drop is noticeable at a few hundred metres but not so fast that leading a
+    // moving target becomes guesswork. Roughly 1.2 m of drop per 100 m at this speed.
+    muzzleVelocityMps: 800,
+    // Recorded for V3's penetration work; it does nothing in V2.
+    massKg: 5,
+    // Bounds the work one shot can cost and stops an upward shot flying forever.
+    maxRangeM: 2500,
+    maxLifetimeSeconds: 30,
+    // Collision sampling interval. At 800 m/s a 60 Hz tick covers ~13 m, so without sub-stepping a
+    // shell would pass straight through a hill. 1 m keeps the error below what the player or a
+    // penetration calculation could notice.
+    maxSubstepM: 1,
+  },
 };
 
 // Validate at module load. A bad definition must stop the process, not produce a broken vehicle.

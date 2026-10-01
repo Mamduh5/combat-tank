@@ -1,11 +1,32 @@
 import type { InputCommand } from '../../shared/input.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
-import { clamp, degToRad, smoothingFactor, vec3, wrapAngle, cos, sin, atan, type Vec3 } from '../math/index.js';
+import {
+  atan,
+  clamp,
+  cos,
+  degToRad,
+  radToDeg,
+  sin,
+  smoothingFactor,
+  vec3,
+  wrapAngle,
+  type Vec3,
+} from '../math/index.js';
 import type { Terrain } from '../world/terrain.js';
 import { LongitudinalModel, moveToward } from './locomotion.js';
+import {
+  createMainGunState,
+  trunnionPosition,
+  tryFire,
+  updateMainGun,
+  type MainGunState,
+} from './main-gun.js';
+import { createTurretState, gunDirection, updateTurret, type TurretState } from './turret.js';
 import type { VehicleInit, VehicleState, VehicleTelemetry } from './vehicle-state.js';
 
 export type { VehicleInit, VehicleState, VehicleTelemetry } from './vehicle-state.js';
+export type { MainGunState, GunLoadState } from './main-gun.js';
+export type { TurretState } from './turret.js';
 
 /**
  * Width of the play-area boundary speed taper, in metres.
@@ -23,10 +44,11 @@ const PLAY_AREA_TAPER_M = 14;
  * changes them. There is no global state anywhere in the core, which is what lets the same class
  * run inside a test, inside the browser client, and later inside an authoritative server.
  *
- * The turret exists in V1 only as a **passive** mount that inherits the hull's heading. It has no
- * traverse behaviour, no gun, and no aiming; the owner settled direct WASD hull control for
- * driving (OD-02), and independent turret control is V2 work. It is here so the placeholder model
- * has the right silhouette, and so the camera has a forward direction to look along.
+ * The hull, turret and gun are three **separate systems** with separate state, which is the property
+ * V2 exists to establish. The hull is driven by the player (OD-02, direct WASD — the hull is never
+ * turned toward the camera or the aim point); the turret is a rate-limited servo on an aim point; the
+ * gun elevates within its own limits and fires only when loaded. The vehicle ties them together by
+ * stepping them in order each tick, and by refusing to let any one of them shortcut another.
  */
 export class Tank {
   readonly definition: VehicleDefinition;
@@ -36,6 +58,27 @@ export class Tank {
   telemetry: VehicleTelemetry;
 
   private readonly longitudinal: LongitudinalModel;
+
+  /**
+   * Turret and gun orientation.
+   *
+   * Held separately from the hull's state rather than folded into it, because they are separate
+   * systems with separate rules: the hull is driven, the turret is a servo, and the gun has limits
+   * the turret does not. Keeping them apart is what stops a future change from accidentally making
+   * the whole vehicle behave like a character that turns to face the cursor.
+   */
+  readonly turretState: TurretState;
+
+  /** Load state and reload timer. The core owns these so a shot can be refused authoritatively. */
+  readonly gunState: MainGunState;
+
+  /**
+   * A shot requested this tick that the gun accepted, or `null`.
+   *
+   * Drained by the simulation world each tick. A request is only ever set when the gun was loaded,
+   * so consuming it cannot produce a shot the core would not permit.
+   */
+  private pendingShot: { origin: Vec3; direction: Vec3 } | null = null;
 
   /**
    * Hard boundary on the play area, set from the terrain on the first step.
@@ -48,6 +91,8 @@ export class Tank {
   constructor(definition: VehicleDefinition, init: VehicleInit) {
     this.definition = definition;
     this.longitudinal = new LongitudinalModel(definition);
+    this.turretState = createTurretState();
+    this.gunState = createMainGunState();
 
     this.state = {
       position: init.position,
@@ -73,12 +118,36 @@ export class Tank {
       stalled: false,
       accelMps2: 0,
       groundHeightM: 0,
+      turretWorldHeadingRad: init.headingRad,
+      turretTraverseRateDegPerSec: 0,
+      gunElevationDeg: 0,
+      gunElevateRateDegPerSec: 0,
+      gunLoadState: 'loaded',
+      reloadRemainingSeconds: 0,
+      shotsFired: 0,
     };
   }
 
   /** Hull forward direction on the horizontal plane. */
   get forwardDirection(): Vec3 {
     return vec3(sin(this.state.headingRad), 0, cos(this.state.headingRad));
+  }
+
+  /** World position of the gun's pivot, which is where the barrel is mounted. */
+  get gunPivotPosition(): Vec3 {
+    return trunnionPosition(this.state.position, this.definition.turret.ringHeightM);
+  }
+
+  /**
+   * Takes the shot requested this tick, if any, and clears it.
+   *
+   * Returns `null` when no shot was accepted. The simulation world calls this exactly once per
+   * tick, before creating shells, so a request cannot be consumed twice.
+   */
+  takePendingShot(): { origin: Vec3; direction: Vec3 } | null {
+    const shot = this.pendingShot;
+    this.pendingShot = null;
+    return shot;
   }
 
   /**
@@ -195,6 +264,32 @@ export class Tank {
     state.groundNormal = normal;
     this.updateBodyOrientation(normal, dtSeconds);
 
+    // --- 7. Turret, gun, and the reload cycle -----------------------------------------
+    // Runs *after* the hull has been updated, so the turret is mounted on the heading the vehicle
+    // finished this tick with, not the one it started with. That ordering is why rotating the hull
+    // carries the turret with it, and why the turret can lag if the hull turns faster than it slews.
+    const trunnion = trunnionPosition(state.position, this.definition.turret.ringHeightM);
+    updateTurret(
+      this.turretState,
+      this.definition,
+      state.headingRad,
+      trunnion,
+      input.aimPoint,
+      dtSeconds,
+    );
+    updateMainGun(this.gunState, dtSeconds);
+
+    // A fire request is a *request*. `tryFire` refuses it while reloading and returns the muzzle
+    // position only when the shot actually happens. The world spawns the shell from this; the
+    // vehicle does not know or care what happens to it afterwards.
+    const muzzle = input.fire
+      ? tryFire(this.gunState, this.definition, trunnion, this.turretState, state.headingRad)
+      : null;
+    this.pendingShot =
+      muzzle === null
+        ? null
+        : { origin: muzzle, direction: gunDirection(this.turretState, state.headingRad) };
+
     this.telemetry = {
       speedMps: state.speedMps,
       requestedThrottle: input.throttle,
@@ -206,6 +301,13 @@ export class Tank {
       stalled: solution.stalled,
       accelMps2: solution.accelMps2,
       groundHeightM: groundHeight,
+      turretWorldHeadingRad: this.turretState.localAngleRad + state.headingRad,
+      turretTraverseRateDegPerSec: this.turretState.traverseRateDegPerSec,
+      gunElevationDeg: radToDeg(this.turretState.elevationRad),
+      gunElevateRateDegPerSec: this.turretState.elevateRateDegPerSec,
+      gunLoadState: this.gunState.loadState,
+      reloadRemainingSeconds: this.gunState.reloadRemainingSeconds,
+      shotsFired: this.gunState.shotsFired,
     };
   }
 

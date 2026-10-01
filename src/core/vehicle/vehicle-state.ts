@@ -1,4 +1,5 @@
-import type { Vec3 } from '../math/index.js';
+import type { Vec3 } from '../../shared/vec3.js';
+import type { GunLoadState } from './main-gun.js';
 
 /**
  * Mutable simulation state for one vehicle.
@@ -57,4 +58,23 @@ export interface VehicleTelemetry {
   readonly accelMps2: number;
   /** Height of the terrain directly under the vehicle, metres. */
   readonly groundHeightM: number;
+
+  // --- V2 gunnery ---------------------------------------------------------------------
+  // Reported separately from the hull so a consumer can tell "the vehicle turned" from "the turret
+  // turned". The two are independent, and conflating them is exactly the behaviour the owner asked to
+  // avoid.
+  /** Turret world heading, radians. Equals the hull heading plus the turret's local angle. */
+  readonly turretWorldHeadingRad: number;
+  /** Current turret traverse rate, degrees/second, signed. */
+  readonly turretTraverseRateDegPerSec: number;
+  /** Gun elevation above the turret's horizontal plane, degrees. Positive is up. */
+  readonly gunElevationDeg: number;
+  /** Current gun elevation rate, degrees/second, signed. */
+  readonly gunElevateRateDegPerSec: number;
+  /** Whether the main gun is loaded or reloading. */
+  readonly gunLoadState: GunLoadState;
+  /** Seconds until the gun is loaded again. Zero while loaded. */
+  readonly reloadRemainingSeconds: number;
+  /** Shots actually fired, as opposed to shots requested. */
+  readonly shotsFired: number;
 }

@@ -42,7 +42,7 @@ result in `docs/decisions/`.
 | OD-01 | Vehicle class system | shaping (V8) | open |
 | OD-02 | Driving control model | — | **resolved** — direct WASD |
 | OD-03 | Progression structure | shaping (V11) | open |
-| OD-04 | Ammunition roster | shaping (V3/V4) | open |
+| OD-04 | Ammunition roster | shaping (V3/V4) | open — **deliberately not decided in V2** |
 | OD-05 | Dispersion model | shaping (V3) | open |
 | OD-06 | Repair and module recovery | deferred | open |
 | OD-07 | Module damage depth | shaping (V3) | open |
@@ -90,9 +90,14 @@ Does the player drive the hull directly (WASD = throttle and hull traverse), or 
 - The hull is **never** automatically driven or rotated toward the camera or aim direction
 - No driving assists unless explicitly introduced later
 
-**Impact on the codebase:** `InputCommand` carries only `throttle` and `turn`; the camera rig is
-fully independent of hull heading; `tests/core/locomotion.test.ts` asserts that a vehicle with no
+**Impact on the codebase:** `InputCommand` carries `throttle`, `turn`, `aimPoint` and `fire`; the camera
+rig is fully independent of hull heading; `tests/core/locomotion.test.ts` asserts that a vehicle with no
 turn input does not change heading at all, even while moving.
+
+**V2 update:** `InputCommand` gained `aimPoint` and `fire` (ADR-0011). The mouse still never turns the
+hull: it produces a world aim point, and the *turret* servos toward it. `tests/core/turret.test.ts`
+asserts that rotating the hull carries the turret's world heading without changing its local angle, and
+that the hull does not chase the aim point.
 
 ---
 
@@ -120,8 +125,19 @@ Which shell types exist, and what does each do?
 roster. The owner's brief named armor-piercing, high-velocity, and explosive as *examples*, not a
 commitment.
 
-**Interim position:** one generic shell type for V2/V3, with the data model already carrying
-per-shell penetration, velocity, and damage parameters so types can be added as data.
+**Interim position (updated after V2):** one generic **test shell** ships in V2, and the owner explicitly
+instructed that this decision must **not** be forced during V2. The roster should be decided once
+penetration and armour behaviour exist and can be judged meaningfully.
+
+The interim shape shipped is narrower than originally planned: `TestShellDefinition` carries
+`muzzleVelocityMps`, `massKg`, `maxRangeM`, `maxLifetimeSeconds` and `maxSubstepM`. It deliberately does
+**not** carry penetration or damage, because V2 has no armour model to balance them against — a
+penetration number written now would be an invented constant that later gets "tuned" around.
+
+A test asserts the shell's id and display name stay generic, so a placeholder cannot quietly harden into
+a commitment. When this decision is taken, expect the data model to gain penetration, explosive payload
+and post-penetration effect fields, and `maxRangeM`/`maxSubstepM` to move from "engineering defaults" to
+tuned values.
 
 ---
 
