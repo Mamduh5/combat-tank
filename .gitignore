@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Runtime / tooling caches
+.cache/
+.vite/
+coverage/
+
+# Local environment
+.env
+.env.local
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local simulation artifacts (replays, logs, headless run output)
+*.ctreplay
+logs/
