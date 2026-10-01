@@ -740,6 +740,28 @@ export class EnemyController {
         // Holding still converts the aim point from a moving one into a nearly stationary one, which is
         // the only condition under which a finite traverse rate can converge at all. It is also exactly
         // what a real crew does: stop, lay the gun, fire, then move.
+        //
+        // **Known trade-off, measured in V5F.** Standing still is right when the *opponent* is the one
+        // moving and wrong when the *player* is. A controlled batch comparison — eight battles each,
+        // seeds 1-8, identical in every other respect — gives:
+        //
+        // | scenario         | settle (this rule) | move while slewing |
+        // | ---------------- | ------------------ | ------------------ |
+        // | parked player    | ~6 pen/battle      | ~1 pen/battle      |
+        // | fleeing player   | ~2.5 pen/battle    | ~5.8 pen/battle    |
+        //
+        // So the rule roughly triples damage against a stationary target and roughly halves it against a
+        // target running away at close to the opponent's own top speed. The second case is worse than it
+        // first looks: the gun does converge — measured minimum miss 0.11 m — but only for about one
+        // tick in six thousand, because a fleeing target sweeps the bearing faster than 24 deg/s can
+        // follow while the shooter is standing still.
+        //
+        // It is left as it is, deliberately. The parked case is the one the owner decided the version
+        // around (ADR-0016) and the one a human player actually produces; the fleeing case is a trade-off
+        // rather than a fault, since the opponent still pursues, still lines up, and still lands shots.
+        // Satisfying both needs the opponent to work out *which* situation it is in before choosing
+        // whether to hold — real AI work, recorded as OD-15 rather than smuggled in at the end of a
+        // version whose gameplay objective has already been signed off.
         if (this.gunMissDistanceM(this.currentAimPoint) > ENEMY_TUNING.fireMissToleranceM) {
           return { throttle: 0, turn: 0, avoiding: false };
         }

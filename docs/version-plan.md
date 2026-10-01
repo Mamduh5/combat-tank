@@ -412,8 +412,21 @@ decision) and OD-08 (no AI framework, by design).
 
 ## V5 — Autonomous AI Opponents
 
-**Status: complete.** See the V5 outcome section at the end of this version for what was actually built
-and what changed from the plan.
+**Status: complete.** V5 gameplay was accepted as complete, and the V5F closure pass delivered the
+headless batch runner. See the V5 outcome section at the end of this version.
+
+> **Read this before reopening V5 work.** Two items in the original scope below are **not** outstanding
+> work and must not be treated as such:
+>
+> - **Multiple AI tanks were optional, not required.** The V5 product requirement was one strong
+>   autonomous opponent. A 1v2 scenario was architectural validation, never a completion blocker, and is
+>   deferred to the version where battlefield and team scale require it.
+> - **Difficulty selection was never owner-approved.** It is a player-facing product decision that has not
+>   been designed, and is **deferred** rather than incomplete. Inventing Easy/Normal/Hard parameters to
+>   satisfy this line would be worse than leaving it open.
+>
+> The headless batch runner (`npm run sim`) **was** required and **was delivered in V5F** — see
+> `docs/harness.md`.
 
 **Goal:** make the game genuinely playable and testable alone, with bots that behave believably
 enough to be worth fighting.
@@ -421,6 +434,8 @@ enough to be worth fighting.
 - **Player-visible result:** the player fights a battle against several AI tanks that navigate the
   map, hunt the player, take up firing positions, and miss in ways that look human. Difficulty is
   selectable.
+  *(Shipped: one autonomous opponent, and an enemy health indicator. Multiple tanks and difficulty
+  selection are deferred — see the note above.)*
 
 - **Systems introduced**
   - `src/core/ai` — a **navigation** system: a navigation graph or waypoint structure over the map,
@@ -478,16 +493,14 @@ rather than left for the next agent to discover.**
   OD-11 by deciding that frontal armour must stay strong and the *opponent* must find a better angle,
   so the flank is the mechanism the decision depends on. It is a bounded, committed reposition — not
   coordinated behaviour, which remains deferred.
-- **No difficulty selector.** It is a product decision about what difficulties exist and how they are
-  presented, and nothing in this version's systems needed it. The opponent's competence is currently a
-  single documented profile.
-- **No headless batch runner.** A determinism test over a seeded battle covers the reproducibility
-  requirement; a batch runner for balance sweeps is still open and is listed below.
+- **No difficulty selector.** Deferred by owner decision, not an omission. Difficulty levels are a
+  player-facing product decision that has not been designed.
+- **The headless batch runner shipped in V5F**, below, rather than in V5 proper.
 
 **Validation performed**
 
-- `npm run verify` passes: typecheck, lint (including the core-purity rule), and 332 tests.
-- Five tests added in this version specifically pin defects found during it — the angular fire gate, the
+- `npm run verify` passes: typecheck, lint (including the core-purity rule), and the full test suite.
+- Six tests added in this version specifically pin defects found during it — the angular fire gate, the
   cancelled flank, the mismatched range bands, the charging-player regression, the loss of a circling
   player, and a determinism check that compares the gun tick by tick rather than one final position.
 - Visual verification was performed in the browser with `tools/ai-duel.js`: against a parked player the
@@ -496,12 +509,40 @@ rather than left for the next agent to discover.**
 - Measured across five seeds and three player behaviours (parked, circling, charging), the opponent
   lands a penetration in every case.
 
-**Not done, carried forward**
+**Not done, and their status**
 
-- A headless batch runner for balance measurement (`npm run sim`).
-- Difficulty selection, which needs an owner decision on what the difficulties are.
-- A navigation graph, deliberately deferred to V6 where real map data exists to build one against.
+- **Multiple opponents** — optional architectural validation, **deferred** to the version where team
+  scale requires it. Not outstanding V5 work.
+- **Difficulty selection** — **deferred**, pending an owner product decision. Not outstanding V5 work.
+- **A navigation graph** — deliberately deferred to V6, where real map data exists to build one against.
+- **The headless batch runner** — was outstanding; **delivered in V5F** below.
 
+
+## V5F — Simulation Harness / Closure Pass
+
+**Status: complete.** Not a gameplay version. V5's gameplay objective was accepted before this pass
+began; V5F delivered the one outstanding V5 deliverable and nothing else.
+
+- **Built:** `src/tools/headless/` and `npm run sim` — a headless batch battle runner over the real
+  simulation, combat and AI. Documented in `docs/harness.md`.
+- **Deliberately not built:** any new combat behaviour. The one AI change considered was measured and
+  then **reverted**; see below.
+- **Outcome:** one behavioural trade-off found and recorded as **OD-15**. No V5 defect was found, so none
+  was "fixed".
+
+The runner earned its keep twice over, in ways worth recording:
+
+1. **It caught the harness itself lying.** The first `charging` scenario supplied an aim point and
+   expected the player to charge. In this game an aim point servos the *turret* and does not move the
+   hull, so the player accelerated in a straight line, passed the opponent on the third second and drove
+   off into unbounded terrain — all twenty seeds finishing 183 m apart. It was measuring a footrace
+   between an 8.4 m/s tank and a 5.6 m/s one and calling it a charge. A test now pins the distinction.
+2. **It found a real trade-off in the AI.** `retreating` flagged seeds where the opponent saw the player
+   for 93 seconds without firing. A controlled comparison showed that the "settle the gun before moving"
+   rule roughly triples damage against a stationary player and roughly halves it against a fleeing one.
+   That is a genuine design trade-off rather than a bug, so it was measured, documented as **OD-15**, and
+   **left alone** — changing it would have reopened a version whose gameplay objective was already signed
+   off.
 
 ---
 

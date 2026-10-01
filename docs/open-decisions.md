@@ -109,28 +109,60 @@ rather than a finished one; it is tracked there rather than reopened here.
 
 ## OD-14: V5's stated scope was not delivered in full
 
-- **Status:** Open - needs an owner decision on sequencing
+- **Status:** **Closed in V5F by owner decision** - scope confirmed as met
 - **Raised:** V5
 
-`docs/version-plan.md` scoped V5 as several AI tanks, a difficulty selector, and a headless batch
-runner. What shipped is **one competent opponent**, and the gap is real rather than a matter of
-interpretation.
+`docs/version-plan.md` originally scoped V5 as several AI tanks, a difficulty selector, and a headless
+batch runner. The owner has since confirmed the scope, which removes the ambiguity this entry existed to
+resolve.
 
-Deliberately reduced, and defensible on its own terms:
+- **One opponent is the V5 requirement.** Multiple simultaneous opponents were **optional architectural
+  validation, not a completion blocker**, and are deferred to the version where battlefield and team scale
+  actually require them. The 1v2 case was never a V5 deliverable.
+- **No difficulty selector.** Deferred, not incomplete. Difficulty levels are a player-facing product
+  decision that has not been designed, and inventing Easy/Normal/Hard parameters merely to satisfy an old
+  planning line would be worse than leaving it open.
+- **The headless batch runner shipped in V5F.** `npm run sim`, implemented in `src/tools/headless/`, was
+  the one genuinely owed item and it is now complete. See `docs/harness.md`.
 
-- **One opponent, not several.** `Simulation` holds a single target; a second tank is a structural change
-  to the world rather than an AI change.
-- **No difficulty selector.** What the difficulties *are* is a player-facing product decision, and per
-  `docs/agent-working-guide.md` §3 that is the owner's call rather than an agent's.
+V5's gameplay objective is accepted as complete. Nothing in this entry is outstanding work.
 
-Not yet built, and genuinely owed:
+---
 
-- **`npm run sim`, the headless batch runner.** The version plan asks for it and lists balance measurement
-  as the reason. It is unblocked, well-specified, and would make every future tuning pass measurable
-  instead of anecdotal. It is the highest-value unfinished item in the project right now.
+## OD-15: The opponent shoots far less at a player who is running away
 
-The recommendation is to build the batch runner before V6 begins, since V6's map work needs it to
-sanity-check positioning, and to ask the owner what difficulties should exist rather than inventing them.
+- **Status:** Open - known trade-off, not a defect
+- **Raised:** V5F
+- **Found by:** `npm run sim -- --scenario retreating` (see `docs/harness.md`)
+
+The V5 opponent stops moving while its gun is coming around, so that the aim point stops moving and a
+finite turret traverse rate can actually reach it. Against a parked player that is exactly right, and it
+is what made the frontal-armour case work at all. Against a player who is *fleeing* it is the wrong call,
+because a moving shooter has a trackable aim point and a stationary one does not.
+
+Measured over eight battles per scenario, seeds 1-8, changing nothing but this rule:
+
+| scenario       | settle the gun | move while slewing |
+| -------------- | -------------- | ------------------ |
+| parked player  | ~6 pen/battle  | ~1 pen/battle      |
+| fleeing player | ~2.5 pen/battle | ~5.8 pen/battle   |
+
+The fleeing case is not a failure of will. The gun *does* converge - measured minimum miss distance
+0.11 m, comfortably inside the 1.2 m fire gate - but only for about **one tick in six thousand**, because
+a target withdrawing at close to the opponent's own top speed sweeps the bearing faster than 24 deg/s can
+follow. The batch harness reports these seeds as "saw the player and did not fire", which is the honest
+description.
+
+**Why this is recorded rather than fixed.** The rule is a deliberate trade-off, not an oversight, and the
+parked case is the one the owner decided the version around (ADR-0016) and the one a human player actually
+produces. Removing the rule to favour fleeing targets would undo the fix for the defect that shipped in
+V5. Doing both needs the opponent to determine *which* situation it is in before choosing whether to
+hold - a real piece of AI design, with its own failure modes, that should be measured rather than
+rushed into a version whose gameplay objective is already signed off.
+
+**Where it should be picked up.** It is an AI-behaviour question, not a map question, so it does not
+belong to V6's terrain and spotting work. It belongs to the next pass that revisits the opponent.
+
 
 # Open Decisions
 

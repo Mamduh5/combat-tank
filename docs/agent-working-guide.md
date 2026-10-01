@@ -331,3 +331,31 @@ you care about on every tick.
 **Retreating is not driving.** Using `steerToward` to back away turns the hull through 180 degrees,
 spending the whole hull traverse rate and pointing the tank's back at the enemy. `reverseFrom` backs up
 instead, keeping both the range and the facing.
+
+## V5F additions: working on the harness
+
+**`npm run sim` is the fastest way to answer a behavioural question.** Run several seeded battles against
+a scripted player and read the numbers. It is not slower than reasoning about the code — it is faster,
+because the questions worth asking ("does it ever fire?", "does it lose the player?", "how often does a
+shell actually reach the target?") are questions about *emergent* behaviour, and emergent behaviour is
+exactly what reading the code cannot tell you. See `docs/harness.md`.
+
+**A measurement can be wrong in a way that looks entirely healthy.** The first `charging` scenario
+supplied an aim point and expected the player to charge. In this game the aim point servos the *turret*
+and does not move the hull, so the player drove in a straight line, passed the opponent on the third
+second and left the map — and the batch reported a perfectly plausible, completely meaningless 183 m
+separation. When a number looks odd, check that it measures what its name claims before concluding the
+game is broken. A twenty-seed sweep producing *identically* wrong results is the tell: real emergent
+behaviour varies, a bug does not.
+
+**Harness bugs present as game bugs.** The runner's first version failed on any second invocation with
+"Port 24678 is already in use", because Vite's HMR websocket was enabled on a server that exists only to
+transform TypeScript. Know the difference between your tooling failing and the thing under test failing,
+or you will spend an afternoon debugging the game for a fault in the measuring instrument.
+
+**Do not tune the AI to make a batch look better.** A sweep flagged seeds where the opponent saw the
+player for 93 seconds without firing. Measuring the obvious fix showed it roughly triples damage against a
+stationary player and roughly halves it against a fleeing one — a real trade-off, not a defect. The
+correct outcome was to record it (OD-15) and leave it, because the version's gameplay objective had
+already been signed off. A batch that reports an uncomfortable truth is working; silencing it is not.
+

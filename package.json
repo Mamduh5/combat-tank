@@ -17,6 +17,7 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "sim": "node tools/sim.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {

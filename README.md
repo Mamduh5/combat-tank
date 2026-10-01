@@ -76,6 +76,7 @@ faces the same way you do, so its rear is toward you at the beginning.
 | `npm run typecheck` | TypeScript only |
 | `npm run lint` | ESLint, including the core-purity rules |
 | `npm test` | Vitest suite |
+| `npm run sim` | **Headless batch battles** — real AI fights with no renderer, plus an aggregate report |
 | `npm run verify` | **typecheck + lint + test** — the gate a version must pass |
 
 ### Layout
@@ -108,6 +109,7 @@ that the rule actually fires.
 | [`docs/glossary.md`](docs/glossary.md) | Shared domain vocabulary | Reference |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | How architectural decisions are recorded (ADR process) | **Authoritative** for decision records |
 | [`docs/assumptions.md`](docs/assumptions.md) | Planning assumptions made without owner confirmation | Reference; revisit when the owner decides |
+| [`docs/harness.md`](docs/harness.md) | How to use `npm run sim`, and how to read what it prints | Reference |
 
 **Conflict rule:** if two documents disagree, the more specific one wins for its subject matter
 (architecture beats vision on *how*; vision beats architecture on *what*). If a conflict is still
