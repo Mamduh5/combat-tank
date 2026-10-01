@@ -13,8 +13,17 @@ a decision.
   minimal, and note it in your report and in `docs/assumptions.md`.
 - When the owner answers, update the **Status** and **Decision** fields here. Do not delete the entry
   — the record of what was open is itself useful.
-- Technical questions (OD-10 to OD-12) are listed here for convenience but are settled by technical
-  investigation, and are owned by `docs/technical-direction.md`.
+
+### Escalation: what needs the owner, and what does not
+
+The owner has delegated ordinary engineering decisions to the implementing agent. Escalate **only**
+when a choice materially affects player-facing gameplay, game rules, controls or feel, product scope,
+progression, monetisation, platform or distribution, visual direction, or major content direction.
+
+Do **not** escalate: monorepo versus single package, internal boundaries, physics strategy,
+determinism technique, lint or tooling configuration, test framework, build tooling, or anything
+already covered by an ADR. Decide these on evidence, simplicity and maintainability, and record the
+result in `docs/decisions/`.
 
 ---
 
@@ -25,6 +34,25 @@ a decision.
 | **Blocking** | A version cannot start or finish without this. |
 | **Shaping** | Work can proceed, but will need rework or a second pass. |
 | **Deferred** | Nothing needs it yet. It is recorded so it is not forgotten. |
+
+## Summary
+
+| ID | Question | Urgency | Status |
+| --- | --- | --- | --- |
+| OD-01 | Vehicle class system | shaping (V8) | open |
+| OD-02 | Driving control model | — | **resolved** — direct WASD |
+| OD-03 | Progression structure | shaping (V11) | open |
+| OD-04 | Ammunition roster | shaping (V3/V4) | open |
+| OD-05 | Dispersion model | shaping (V3) | open |
+| OD-06 | Repair and module recovery | deferred | open |
+| OD-07 | Module damage depth | shaping (V3) | open |
+| OD-08 | Battle modes | shaping (V7) | open |
+| OD-09 | AI sophistication ceiling | deferred | open |
+| OD-10 | Client prediction vs. server authority | blocking (V9) | open — gated on the determinism test |
+| OD-11 | Single package vs. monorepo | — | **resolved** — single package (ADR-0002) |
+| OD-12 | Tank locomotion model | — | **resolved** — kinematic (ADR-0007) |
+| OD-13 | Target frame rate and hardware | shaping (V12) | open |
+| OD-14 | Platform, distribution, monetisation | deferred | open |
 
 ---
 
@@ -48,17 +76,23 @@ data model, explicitly without committing to a class taxonomy.
 ---
 
 ### OD-02 — Driving control model
-**Urgency:** blocking for V1 · **Status:** open
+**Urgency:** was blocking for V1 · **Status:** RESOLVED by owner, 2026-10-01
 
 Does the player drive the hull directly (WASD = throttle and hull traverse), or with an
 "accelerate toward where I'm looking" assist?
 
-**Why it matters:** this is the single most important control decision in the game. It determines
-how the camera, the input layer, and the AI interface relate. It is also a feel decision that is
-expensive to change once players have learned it.
+**Decision: direct WASD hull control.**
+- W = drive forward
+- S = reverse
+- A/D = rotate the hull
+- Mouse = camera and aiming direction
+- Turret orientation is independent of hull orientation
+- The hull is **never** automatically driven or rotated toward the camera or aim direction
+- No driving assists unless explicitly introduced later
 
-**Interim position:** direct control (WASD), matching the owner's stated expectation, with the
-assist deferred until it is felt to be needed.
+**Impact on the codebase:** `InputCommand` carries only `throttle` and `turn`; the camera rig is
+fully independent of hull heading; `tests/core/locomotion.test.ts` asserts that a vehicle with no
+turn input does not change heading at all, even while moving.
 
 ---
 
@@ -171,26 +205,33 @@ server authority if the test cannot be made to pass. See `docs/technical-directi
 ---
 
 ### OD-11 — Single package vs. monorepo
-**Urgency:** blocking for V1 scaffolding · **Status:** open (technical)
+**Urgency:** was blocking for V1 scaffolding · **Status:** RESOLVED, 2026-10-01 (ADR-0002)
 
 One package with enforced internal boundaries, or a workspace monorepo with `packages/core`,
 `packages/client`, and `packages/server`?
 
-**Interim position:** single package, revisited at V9 when a server must be deployed separately. See
-ADR-0002 and `docs/technical-direction.md` §1.
+**Decision: single package**, with the core/client boundary enforced mechanically by ESLint and by an
+architecture test rather than by package topology. Revisit at V9, when a server must be built and
+deployed separately.
+
+**Impact:** `src/core`, `src/shared`, `src/client` in one `package.json`; `npm run verify` runs
+typecheck, lint and tests as a single gate.
 
 ---
 
 ### OD-12 — Tank locomotion model
-**Urgency:** blocking for V1 · **Status:** open (technical)
+**Urgency:** was blocking for V1 · **Status:** RESOLVED, 2026-10-01 (ADR-0007)
 
 An explicit kinematic movement model in the core (recommended), or a Rapier dynamic rigid body /
 vehicle controller?
 
-**Why it matters:** it determines whether tank handling is a designed, designer-tunable feel or an
-emergent property of a physics engine.
+**Decision: kinematic model in the core.** Rapier is used for collision *queries* — the terrain
+mesh, camera obstruction, and the line-of-sight test V6 needs — but never to decide how a tank
+drives. Grounding uses the analytic terrain function rather than a ray cast against the collision
+mesh, because a mesh query quantises height to the grid and produces visible jitter.
 
-**Interim position:** kinematic model, decided by a short spike during V1 and recorded as an ADR.
+**Impact:** `src/core/vehicle/locomotion.ts` holds the movement model with no physics dependency;
+every handling value comes from the vehicle definition.
 
 ---
 

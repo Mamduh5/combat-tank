@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Combat Tank — V1 Movement Sandbox</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --hud-fg: #d8e2dc;
+        --hud-dim: #8b9a92;
+        --hud-bg: rgba(12, 16, 14, 0.55);
+        --hud-accent: #c8d64b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0b0f0d;
+        font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+        color: var(--hud-fg);
+      }
+
+      #render-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        outline: none;
+        touch-action: none;
+      }
+
+      /* ---- HUD ---- */
+      .hud {
+        position: fixed;
+        pointer-events: none;
+        user-select: none;
+        z-index: 10;
+      }
+
+      #hud-speed {
+        left: 24px;
+        bottom: 24px;
+        background: var(--hud-bg);
+        border-left: 3px solid var(--hud-accent);
+        padding: 10px 16px 12px;
+        min-width: 190px;
+      }
+
+      #hud-speed .speed-value {
+        font-size: 40px;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #hud-speed .speed-unit {
+        font-size: 13px;
+        color: var(--hud-dim);
+        margin-left: 6px;
+      }
+
+      #hud-speed .speed-sub {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--hud-dim);
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      #hud-speed .gear {
+        color: var(--hud-accent);
+        font-weight: 700;
+      }
+
+      #hud-aim {
+        right: 24px;
+        bottom: 24px;
+        background: var(--hud-bg);
+        border-right: 3px solid var(--hud-accent);
+        padding: 10px 16px 12px;
+        text-align: right;
+        min-width: 150px;
+      }
+
+      #hud-aim .aim-range {
+        font-size: 26px;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #hud-aim .aim-label {
+        font-size: 11px;
+        color: var(--hud-dim);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-top: 6px;
+      }
+
+      #hud-hint {
+        left: 50%;
+        top: 22px;
+        transform: translateX(-50%);
+        background: var(--hud-bg);
+        padding: 8px 18px;
+        font-size: 12px;
+        color: var(--hud-dim);
+        text-align: center;
+        line-height: 1.7;
+        transition: opacity 400ms ease;
+      }
+
+      #hud-hint b {
+        color: var(--hud-fg);
+        font-weight: 600;
+      }
+
+      #hud-hint.hidden {
+        opacity: 0;
+      }
+
+      /* Centre reticle: represents the camera/aim ray. A real gun reticle arrives in V2. */
+      #reticle {
+        left: 50%;
+        top: 50%;
+        width: 26px;
+        height: 26px;
+        margin: -13px 0 0 -13px;
+        opacity: 0.75;
+      }
+
+      #reticle::before,
+      #reticle::after {
+        content: "";
+        position: absolute;
+        background: var(--hud-accent);
+      }
+
+      #reticle::before {
+        left: 50%;
+        top: 0;
+        width: 1px;
+        height: 100%;
+        margin-left: -0.5px;
+      }
+
+      #reticle::after {
+        top: 50%;
+        left: 0;
+        height: 1px;
+        width: 100%;
+        margin-top: -0.5px;
+      }
+
+      #hud-status {
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%);
+        font-size: 13px;
+        color: var(--hud-dim);
+        background: var(--hud-bg);
+        padding: 8px 20px;
+      }
+
+      #hud-status.error {
+        color: #ff8f7a;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="render-canvas"></canvas>
+
+    <div class="hud" id="hud-speed">
+      <div>
+        <span class="speed-value" id="speed-value">0.0</span><span class="speed-unit">m/s</span>
+      </div>
+      <div class="speed-sub">
+        <span class="gear" id="gear-value">N</span>
+        <span id="traverse-value">TRAVERSE 0&deg;/s</span>
+      </div>
+    </div>
+
+    <div class="hud" id="hud-aim">
+      <div class="aim-range" id="aim-range">--</div>
+      <div class="aim-label">Aim range (m)</div>
+    </div>
+
+    <div class="hud" id="reticle"></div>
+
+    <div class="hud" id="hud-hint">
+      <b>W</b>/<b>S</b> drive &nbsp;&middot;&nbsp; <b>A</b>/<b>D</b> rotate hull &nbsp;&middot;&nbsp;
+      <b>Mouse</b> look &nbsp;&middot;&nbsp; <b>Wheel</b> zoom &nbsp;&middot;&nbsp; <b>Esc</b> release
+      cursor
+    </div>
+
+    <div class="hud" id="hud-status">Click to capture mouse</div>
+
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>

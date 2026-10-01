@@ -36,19 +36,32 @@ Files are named `NNNN-short-slug.md`, numbered sequentially from `0001`, and use
 | # | Decision | Status | Date | Review |
 | --- | --- | --- | --- | --- |
 | [0001](0001-headless-simulation-core.md) | Headless deterministic simulation core with thin client/server shells | Accepted | 2026-10-01 | V1 |
-| [0002](0002-single-package-enforced-boundaries.md) | Single package with enforced module boundaries; no monorepo yet | Accepted | 2026-10-01 | **V9** — revisit when a server is deployed separately |
+| [0002](0002-single-package-enforced-boundaries.md) | Single package with enforced module boundaries; no monorepo yet | Accepted (settles OD-11) | 2026-10-01 | **V9** — revisit when a server is deployed separately |
 | [0003](0003-data-driven-vehicle-definitions.md) | Data-driven vehicle definitions with a validated schema | Accepted | 2026-10-01 | V8 |
 | [0004](0004-server-authoritative-multiplayer.md) | Server-authoritative multiplayer; clients never assert combat outcomes | Accepted | 2026-10-01 | V9 |
 | [0005](0005-deterministic-math-in-core.md) | No `Math.sin`/`Math.cos` in the simulation core; own deterministic math | Accepted | 2026-10-01 | V9 |
 | [0006](0006-no-game-framework-ui.md) | No game-framework UI library in the client | Accepted | 2026-10-01 | **V11** — revisit when the garage exists |
+| [0007](0007-kinematic-tank-locomotion.md) | Kinematic tank locomotion; Rapier for queries, not for driving | Accepted (settles OD-12) | 2026-10-01 | V2 |
+| [0008](0008-simulation-tick-rate.md) | Fixed 60 Hz simulation tick, independent of frame rate | Accepted | 2026-10-01 | **V9** — revisit for the network tick |
+| [0009](0009-shared-terrain-geometry.md) | Renderer and physics share one terrain mesh; collision uses a trimesh | Accepted | 2026-10-01 | V6 — revisit for authored maps |
 
-> The ADRs above were **written during the V0 planning pass** and describe the proposed direction.
-> They are marked Accepted on the strength of `docs/technical-direction.md`, but they have not yet
-> been confirmed by the owner. If the owner rejects any of them, the ADR must be updated or
-> superseded — not silently ignored. Two of them (0002 and 0006) are explicitly time-boxed to a
-> later version rather than being permanent.
+ADR-0007, ADR-0008 and ADR-0009 were written during **V1 implementation** and record engineering
+decisions made on evidence rather than waiting for owner approval, per the delegation of technical
+authority. ADR-0001 to ADR-0006 remain proposals carried over from the V0 planning pass; the owner
+has since confirmed that ordinary engineering decisions are the implementing agent's to make, so they
+stand as accepted.
 
-> **Not yet decided, and therefore not yet recorded here:** OD-10 (client prediction vs. pure server
-> authority) and OD-12 (kinematic vs. dynamic locomotion). Both are open technical questions in
-> `docs/open-decisions.md` and will get their own ADRs when the V1 spike and the V9 determinism test
-> settle them.
+> **Still undecided and therefore not recorded here:** OD-10 (client prediction vs. pure server
+> authority). That one depends on whether cross-machine determinism proves achievable, which is a V9
+> question with real consequences for how the game feels. It will get its own ADR when the V9
+> determinism test answers it.
+
+### What each ADR settles
+
+| Open decision | Settled by | Outcome |
+| --- | --- | --- |
+| OD-02 driving model | Owner decision (not an ADR) | Direct WASD hull control |
+| OD-11 single package vs. monorepo | ADR-0002 | Single package, revisit at V9 |
+| OD-12 tank locomotion | ADR-0007 | Kinematic model in the core |
+| OD-10 client prediction | *open* | Gated on the V9 determinism test |
+

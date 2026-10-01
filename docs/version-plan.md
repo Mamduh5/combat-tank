@@ -48,6 +48,9 @@ runnable game on its own terms.
 
 ## V1 — Movement & Camera Sandbox
 
+**Status: complete** (2026-10-01). See "V1 outcome" at the end of this section for what was
+actually built and what changed from the plan.
+
 **Goal:** prove that a tank can be driven and looked at, and that the core/client split works.
 
 - **Player-visible result:** the player spawns in a placeholder tank on a simple terrain, drives it
@@ -88,6 +91,48 @@ runnable game on its own terms.
   placeholders, any network code, and any UI beyond a speed readout.
 
 - **Depends on:** V0.
+
+### V1 outcome
+
+**Delivered.** `npm run verify` passes (typecheck, lint, 105 tests) and `npm run build` produces a
+bundle. The remaining manual step — driving the tank in a browser and judging its feel — is the one
+thing automated checks cannot do, and is listed in the V1 report as outstanding.
+
+**Validation criteria status**
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| `npm run verify` green | **met** | typecheck, lint, 105 tests across 6 files |
+| Lint fails the build on a core Babylon/Colyseus import | **met** | `tests/architecture/core-purity.test.ts` writes a violating file into `src/core` and asserts ESLint exits non-zero, for five separate violations, plus a clean-file control |
+| Same seed and inputs produce identical state | **met** | `tests/core/determinism.test.ts` |
+| Vehicle rates come from the data definition, not constants | **met** | `tests/core/locomotion.test.ts` runs several definitions and asserts the measured behaviour follows the data |
+| Tank accelerates with visible weight | **partly met** | Numerically verified: ~4.5 s to top speed, weak coast deceleration, 1.9 s to full traverse. The *felt* quality still needs a human at the keyboard |
+| Cannot pivot instantly | **met** | Asserted numerically: the first tick of a turn reaches under 10% of peak traverse rate |
+| Drives on slopes without jitter or falling through | **met** | Ground contact uses the analytic surface, so there is no grid quantisation to jitter; asserted over 900 ticks of varied driving |
+| Camera does not clip into the ground | **implemented, unverified by eye** | Ray-cast obstruction with immediate pull-in and slow release (ADR-0009 geometry); the numeric behaviour is tested, the visual result is not |
+
+**What changed from the plan, and why**
+
+1. **The plan called for "downward ray casts for ground height/normal".** Grounding instead uses the
+   analytic terrain function; Rapier ray casts serve the camera and line-of-sight queries. A ray cast
+   against a sampled mesh quantises height to the grid, which produces exactly the jitter the
+   acceptance criteria forbid. Recorded in ADR-0007.
+2. **The plan implied a Rapier heightfield collider.** A shared triangle mesh is used instead, built
+   once and consumed by both the renderer and the physics world. Rapier's heightfield index-to-axis
+   mapping is not inferable from its signature, and a wrong guess produces a silently rotated
+   collider. Recorded in ADR-0009.
+3. **Three ADRs were added** for decisions the plan asked to be settled during V1: OD-11 (ADR-0002),
+   OD-12 (ADR-0007), and the tick rate (ADR-0008).
+4. **The terrain had to be redesigned.** See the note below; this was a genuine bug, not a preference.
+
+**Bugs the V1 tests caught, worth remembering**
+
+- The deterministic `cos` polynomial was written with its coefficients shifted by one term, so it
+  returned ~1.03 where it should return 0.71. It looked like a plausible smooth function.
+- The `sin`/`cos` quadrant reduction ignored quadrant parity, making `sin(PI/2)` return 0.
+- Terrain ridges were specified as 0.6–1.6 rad/m, a **4–10 m wavelength**. That is corrugated noise,
+  not hills: unrepresentable by any practical collision grid, and near-vertical rather than drivable.
+  Now specified as wavelengths in metres, with the gradient bound as a checkable constraint.
 
 ---
 

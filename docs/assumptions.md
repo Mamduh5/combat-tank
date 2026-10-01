@@ -22,6 +22,8 @@ unit mixing — a reliable source of silent bugs — visible in identifier names
 **Why:** handling should be a designed, tunable feel, and the server must reproduce it exactly.
 **Cost if wrong:** contained — it is a V1 spike (OD-12) with a recorded alternative, and swapping
 later means rewriting one module.
+**Status: CONFIRMED during V1 implementation.** Recorded in ADR-0007, which also covers the related
+finding that ground contact uses the analytic terrain rather than a mesh ray cast.
 
 ## A-03 — Determinism is a goal with a fallback, not a guarantee
 **Assumed:** the project builds for client prediction, but will fall back to pure server authority
@@ -30,18 +32,23 @@ if cross-machine determinism cannot be achieved.
 bit-exact cross-machine agreement is plausible but unproven.
 **Cost if wrong:** reduced responsiveness in multiplayer, not a broken game. This is why the
 fallback is acceptable.
+**Status: still open (OD-10).** The core is built so the V9 test can answer it either way: the
+deterministic trig module and the seeded RNG are in place and covered by tests.
 
 ## A-04 — Simulation tick of 60 Hz, network tick possibly lower
 **Assumed:** the core steps at a fixed 60 Hz from V1; the network tick rate is decided at V9.
 **Why:** fixing the core to the network rate would be premature; 60 Hz is a safe default that can be
 lowered later.
 **Cost if wrong:** trivial, since the core is tick-driven from the start.
+**Status: CONFIRMED during V1 implementation.** Recorded in ADR-0008, which adds the frame-delta
+clamp, the catch-up cap, and the once-per-frame input rule.
 
 ## A-05 — Direct WASD hull control
-**Assumed:** W/S throttle and brake/reverse, A/D hull traverse, mouse for turret and gun.
+**Assumed:** W/S throttle and brake/reverse, A/D hull traverse, mouse for looking.
 **Why:** it matches the owner's stated expectation, and the input layer is isolated enough to add an
 assist later.
-**Cost if wrong:** high while unlearned, but the fix is confined to the input layer (OD-02).
+**Cost if wrong:** high while unlearned, but the fix is confined to the input layer.
+**Status: CONFIRMED by the owner.** OD-02 is resolved; this is now a decision, not an assumption.
 
 ## A-06 — Placeholder-first art
 **Assumed:** primitive geometry through at least V5, with visuals bound by id from the vehicle
@@ -55,6 +62,11 @@ not be blocked on assets.
 **Why:** `Math.sin`/`Math.cos` are explicitly called out as non-deterministic across platforms in
 Rapier's own documentation, and the core needs to be reproducible.
 **Cost if wrong:** very low accuracy loss over the ranges used; the code is small and isolated.
+**Status: CONFIRMED during V1 implementation, with two corrections the tests forced.** The initial
+`cos` polynomial had its coefficients shifted by one term, and the quadrant reduction ignored parity;
+both produced smooth, plausible-looking, wrong functions. Accuracy is now asserted against `Math.*`
+across the full range, which is exactly what a test that uses the platform implementation *is
+allowed* to do while production code is not.
 
 ## A-08 — One shell type until the ammunition roster is decided
 **Assumed:** a single generic shell for V2/V3, with the data model already parameterised per shell.

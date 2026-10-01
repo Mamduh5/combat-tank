@@ -203,30 +203,42 @@ Rapier is used for **geometry and collision queries**, not for gameplay rules.
 - Driving AI decisions.
 - Advancing simulation time.
 
-### Vehicle movement — a proposal to be settled by a V1 spike
+### 5.1 Vehicle movement — settled in V1 (ADR-0007)
 
-Rapier ships a `DynamicRayCastVehicleController` (a port of Bullet's `btRaycastVehicle`): a chassis
-rigid body with wheel ray-casts, engine force, braking, and steering. It is a reasonable starting
-point, but it is a **car** controller, and a tank is not a car — tanks steer by differential track
-speed, and the genre demands specific designer-facing numbers (top speed, reverse speed, hull
-traverse rate, power-to-weight).
+Rapier ships a `DynamicRayCastVehicleController` (a port of Bullet's `btRaycastVehicle`), but that is
+a **car** model — engine force, brake force, steering angle — and a tank is not a car. Tanks steer by
+differential track speed, and the genre needs handling expressed as designer-facing numbers.
 
-**Proposed approach:** implement tank locomotion in the core as an **explicit kinematic model**
-(forward/reverse acceleration curves, a separate hull traverse rate, slope resistance) integrated by
-the core on its own tick, using Rapier only for **collision queries** — casting rays downward to
-sample ground height and normal, and casting to detect blocking geometry.
+**Decision: locomotion is an explicit kinematic model in the core** (`src/core/vehicle/locomotion.ts`).
+Drive acceleration comes from the definition's `driveForceN / massKg`, speed is rate-limited toward a
+gradient-dependent limit, and hull traverse ramps toward a requested rate. Rapier is used only for
+collision *queries*.
 
-**Why this is the recommendation:**
-- Tank handling is a *designed feel*, and it must be expressed in units a designer can reason about
-  and a server can reproduce exactly.
-- A dynamic rigid-body vehicle makes weight emergent but hard to control, and adds sensitivity to
-  contact ordering.
-- It keeps the authoritative simulation cheap — a server simulating many tanks needs a predictable,
-  inexpensive movement model.
+**Ground contact uses the analytic terrain function, not a ray cast against the collision mesh.** A
+mesh ray cast quantises height to the grid, which shows up as visible jitter as the vehicle crosses
+cells — precisely the failure the V1 acceptance criteria forbid. The analytic function is exact and
+costs one call.
 
-**The alternative** — a Rapier dynamic body driven by track forces, or the vehicle controller — is
-legitimate, and is recorded as open technical question **OD-12**, to be settled by a spike during
-V1. This document does not pretend the choice is free.
+**Known gap:** vehicle-versus-vehicle pushback is not handled, because there is no rigid body to
+react. When it is needed it should be an explicit displacement response in the core rather than a
+reintroduction of a solver.
+
+### 5.2 Terrain geometry is generated once (ADR-0009)
+
+`src/core/world/terrain-grid.ts` samples the analytic terrain into a vertex/index buffer. The Babylon
+mesh and the Rapier collider are both built from that same buffer — 160 cells to render, 128 to
+collide. Two independent samplings could drift apart, and the symptom (a tank hovering over a hill)
+reads as a terrain bug rather than as a geometry mismatch.
+
+A **trimesh** is used rather than Rapier's `heightfield` shape, because the latter's index-to-axis
+mapping is not inferable from its signature, and a wrong guess produces a silently rotated collider.
+
+Terrain shape is specified as **wavelengths in metres**, not angular frequency, so the gradient bound
+is a calculation rather than a judgement call: a sine layer's steepest gradient is
+`amplitude * 2*PI / wavelength`. The current terrain has a median slope of 0.7°, a 90th percentile of
+25°, and 9% of the map steeper than the vehicle's 26° climb limit — rolling ground with real hills
+and some ground that has to be driven around.
+
 
 ---
 
