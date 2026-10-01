@@ -1,3 +1,102 @@
+## OD-08: The opponent had no real AI framework (V4 position)
+
+- **Status:** Closed in V5
+- **Raised:** V4
+
+### What V4 recorded
+
+V4's opponent was a single state machine with four behaviours, driven through the shared `InputCommand`
+interface (ADR-0014). It could not plan, path, score cover, flank intelligently, or remember anything
+about the fight beyond the player's last known position. That was a deliberate scope boundary: a general
+AI framework built then would have been aimed at a version that had not specified what it needed.
+
+The specific capability V4 measured as missing was **choosing an angle deliberately**. It held one
+preferred bearing and circled; it did not decide that the player's rear was exposed and go there.
+
+### What V5 changed
+
+Option 3 was taken - the same option the owner chose for OD-11 - and the framework concern turned out to
+be the wrong worry. What V5 needed was not a general framework but three narrow capabilities, each in a
+module small enough to be obviously correct:
+
+- `shot-evaluation.ts` predicts a shot using the real penetration model, before firing.
+- `engagement-plan.ts` remembers whether shooting has been working and picks an intent.
+- `navigation.ts` chooses a reachable position and drives there without getting stuck.
+
+There is still no AI framework, no behaviour tree and no utility scorer, and the controller remains a
+single `InputCommand` producer with no path to the damage model. What changed is that it now has a reason
+to choose an angle and evidence to choose it on.
+
+The remaining gap is genuine and recorded as **OD-13** below.
+
+---
+
+## OD-11: A stationary player presenting frontal armour could not be hurt
+
+- **Status:** **Resolved in V5 by decision, not by balance change**
+- **Raised:** V4
+- **Decision:** ADR-0016
+
+The owner resolved this explicitly:
+
+> Do not weaken frontal armour merely so an enemy firing from the front can reliably deal damage.
+> The solution is for an intelligent opponent to recognise ineffective attacks and seek a better tactical
+> solution.
+
+**No armour value changed.** The player's frontal plate still stops 150 mm of penetration cleanly, and a
+test asserts it. What changed is that the opponent now predicts whether a shot will work before taking
+it, is told whether its own shells got through, and flanks after repeated failure.
+
+V5 asserts the *inverse* of V4's test: a player who parks is now defeated by an undamaged mobile
+opponent, and the opponent fires substantially fewer shells than a V4 opponent did - because it is no
+longer paying a five-second reload for shots it knows will bounce.
+
+This establishes the gameplay **principle**: frontal armour is a real advantage that is not a permanent
+one. The numbers remain temporary and may be balanced later.
+
+---
+
+## OD-12: Immobilised vehicles have no rolling resistance
+
+- **Status:** Open - deferred, handling rather than AI
+- **Raised:** V5
+
+Found by measurement while writing V5's AI tests, and it is a pre-existing gap in the locomotion model
+rather than anything the opponent does.
+
+A vehicle whose engine or tracks are destroyed has **no rolling resistance at all**. Measured: a
+destroyed tank crossing flat ground held 3.46 m/s and lost 0.01 m/s of it over two seconds. It does not
+coast to a stop; it rolls, indefinitely, at whatever speed it happened to be doing when it broke.
+
+This matters beyond realism. A wreck that keeps rolling looks powered, so two V4 tests asserted
+`speedMps < 2` as a proxy for "is it still under power" - and those assertions were passing for the wrong
+reason, because the wreck only slowed when it happened to die on a slope. The V5 tests now assert the
+opponent's *intent* and commanded movement instead, which is the property actually meant.
+
+Left open because it is a handling change with consequences for every vehicle, not just the opponent, and
+it deserves to be made deliberately rather than as a side effect of AI work.
+
+---
+
+## OD-13: The opponent loses a circling player
+
+- **Status:** Open - known limitation of V5
+- **Raised:** V5
+
+Found by scripted testing, and the clearest remaining weakness in the AI.
+
+Against a player circling steadily, the opponent acquires a target, fires occasionally, and then lets the
+range grow monotonically - measured 45 m, then 94 m, then 141 m, then 165 m - until it loses line of
+sight entirely and spends the remainder of the fight in `search`, driving to an arena centre the player
+is no longer at.
+
+The cause is that `search` treats the last known position as a place to visit rather than a heading to
+pursue, and `adjust-range` cannot catch a target that is not approaching. It is a gap in *pursuit*, not
+in the tactical layer V5 was built around, which is why it survived a version whose stated goal was that
+fighting the opponent should feel meaningfully different from fighting V4's.
+
+Deferred rather than rushed because a correct fix is a pursuit behaviour with its own failure modes -
+oscillation, tail-chasing, giving up - and those deserve the same measured treatment the rest of V5 got.
 # Open Decisions
 
 **Status:** Authoritative for what is *not* decided.
@@ -180,171 +279,4 @@ added as data.
 
 ---
 
-### OD-08 — Battle modes
-**Urgency:** shaping (needed in V7) · **Status:** open
-
-Which battle modes ship, and in what order? Elimination, base capture, and a limited-spawn variant
-are candidates.
-
-**Why it matters:** modes drive map design, win conditions, and AI objectives.
-
-**Interim position:** a single elimination mode through V6, a second mode in V7.
-
----
-
-### OD-09 — AI sophistication ceiling
-**Urgency:** deferred · **Status:** open
-
-How far does AI go? Rule-based behaviours, designer-authored behaviour trees, or adaptive difficulty
-that reads player skill?
-
-**Why it matters:** adaptive difficulty changes the game's relationship with the player, and is a
-design position, not just a technical one.
-
-**Interim position:** rule-based AI through V7, with a difficulty setting that changes tuning
-parameters but not rules.
-
----
-
-### OD-10 — Client prediction vs. pure server authority
-**Urgency:** blocking for V9 · **Status:** open (technical)
-
-Should the client predict the local vehicle's movement and reconcile with the server, or should the
-client render server state only?
-
-**Why it matters:** prediction is what makes an authoritative server feel responsive; it also
-requires cross-machine determinism, which is a design goal but not yet a proven fact.
-
-**Interim position:** build for prediction, gate it behind a determinism test, and fall back to pure
-server authority if the test cannot be made to pass. See `docs/technical-direction.md` §4.2.
-
----
-
-### OD-11 — Single package vs. monorepo
-**Urgency:** was blocking for V1 scaffolding · **Status:** RESOLVED, 2026-10-01 (ADR-0002)
-
-One package with enforced internal boundaries, or a workspace monorepo with `packages/core`,
-`packages/client`, and `packages/server`?
-
-**Decision: single package**, with the core/client boundary enforced mechanically by ESLint and by an
-architecture test rather than by package topology. Revisit at V9, when a server must be built and
-deployed separately.
-
-**Impact:** `src/core`, `src/shared`, `src/client` in one `package.json`; `npm run verify` runs
-typecheck, lint and tests as a single gate.
-
----
-
-### OD-12 — Tank locomotion model
-**Urgency:** was blocking for V1 · **Status:** RESOLVED, 2026-10-01 (ADR-0007)
-
-An explicit kinematic movement model in the core (recommended), or a Rapier dynamic rigid body /
-vehicle controller?
-
-**Decision: kinematic model in the core.** Rapier is used for collision *queries* — the terrain
-mesh, camera obstruction, and the line-of-sight test V6 needs — but never to decide how a tank
-drives. Grounding uses the analytic terrain function rather than a ray cast against the collision
-mesh, because a mesh query quantises height to the grid and produces visible jitter.
-
-**Impact:** `src/core/vehicle/locomotion.ts` holds the movement model with no physics dependency;
-every handling value comes from the vehicle definition.
-
----
-
-### OD-13 — Target frame rate and hardware target
-**Urgency:** shaping (needed for V12) · **Status:** open
-
-What frame rate and hardware should the game hold, and what is the supported battle size?
-
-**Why it matters:** it is a performance requirement, and an agent should not invent it.
-
-**Interim position:** assume a 60 fps target on a mid-range PC with a small battle size, and treat
-this as provisional until the owner confirms.
-
----
-
-### OD-14 — Platform, distribution, and monetisation
-**Urgency:** deferred · **Status:** open
-
-Is Combat Tank a free-to-play game, a premium purchase, or a game with any monetisation at all? Is
-it distributed via Steam, a website, or elsewhere? PC only, or console later?
-
-**Why it matters:** it constrains accounts, progression, the economy, and the technology choices
-(OD-11 in particular).
-
-**Interim position:** PC only, no monetisation of any kind, no platform-specific work.
-`docs/vision.md` §6 records this as a deliberate non-goal for now.
-
----
-
-## Questions deliberately *not* asked yet
-
-These are open-ended areas where premature questions are themselves a mistake. They are listed so no
-agent assumes an omission was an oversight.
-
-- Crew, crew skills, and wounded crew.
-- Cosmetics, skins, and achievements.
-- Modding and user-generated content.
-- Nations/factions and faction-specific technology.
-- Sound-based detection as a spotting mechanic.
-- Any form of ranked play, seasons, or skill matchmaking.
-- Specific historical vehicle likenesses or real-world names.
-
----
-
-## OD-11: A player who never moves is nearly invulnerable
-
-- **Status:** Open - needs owner input
-- **Raised:** V4
-
-### The question
-
-During V4 measurement, a player who sat still and kept their hull squared up to the opponent **could
-not be hurt at all**. Over 40 seconds of simulated combat the opponent fired five shells; all five hit
-the player's frontal plate, all five were stopped or deflected, and the player finished on 1000 of 1000
-hit points.
-
-The cause is not a bug. The player's front plate is 200 mm thick and pitched 60 degrees, which gives it
-an effective thickness against a head-on shot of roughly 400 mm, against a shell that penetrates 150 mm.
-The armour model is working exactly as V3 designed it.
-
-### Why it is a decision rather than a defect
-
-The same property made the V3 target interesting: shoot the flank or the rear. It is a good property in
-principle. The open question is whether it is too strong when the thing on the other side of the gun is
-a live opponent that will not let you keep presenting that plate.
-
-Three ways this could go, none of them obviously right:
-
-1. **Leave it.** Parking head-on is a legitimate and rewarded tactic, and the fight rewards movement.
-   Risk: a new player who does not understand the game can be effectively invulnerable and conclude it
-   is broken.
-2. **Soften the player's frontal plate** (thinner, or pitched less steeply) so a head-on shot can
-   occasionally get through. Makes the opening exchange faster and less positional.
-3. **Make the opponent actively hunt the flank** rather than circling at a fixed offset. This is a real
-   AI capability and belongs with the V5+ work, not with a balance tweak.
-
-### What V4 did
-
-Option 1, deliberately, and it is now asserted by a test so it cannot change silently. The opponent
-steers to a preferred bearing 58 degrees off the direct line, so it presents its flank and opens the
-player's. A player who manoeuvres is reliably hit; a player who parks is not.
-
-The owner should decide whether that is the intended difficulty curve before V5 builds on it.
-
----
-
-## OD-08: The opponent has no real AI framework (V4 position)
-
-- **Status:** Open - intentionally deferred
-- **Raised:** V4
-
-V4's opponent is a single state machine with four behaviours, driven through the shared `InputCommand`
-interface (ADR-0014). It cannot plan, path, score cover, flank intelligently, or remember anything
-about the fight beyond the player's last known position. That was a deliberate scope boundary: a general
-AI framework built now would be aimed at a version that has not specified what it needs, and would be
-hard to remove later.
-
-The specific capability V4 measures as missing is **choosing an angle deliberately**. It holds one
-preferred bearing and circles; it does not decide that the player's rear is exposed and go there. See
-OD-11, which is partly an AI problem wearing a balance costume.
+#

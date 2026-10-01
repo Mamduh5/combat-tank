@@ -283,7 +283,7 @@ describe('through the simulation', () => {
       enemy.state.position.z - positionAtDeath.z,
     )).toBeLessThan(0.001);
     expect(enemy.telemetry.shotsFired).toBe(shotsAtDeath);
-    expect(sim.enemyController!.state).toBe('disabled');
+    expect(sim.enemyController!.diagnostics.intent).toBe('disabled');
   });
 });
 

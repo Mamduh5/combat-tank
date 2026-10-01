@@ -797,7 +797,44 @@ export class Simulation {
     // were in V2: they are already the complete answer, and there is nothing to penetrate.
     this.combatThisTick = this.resolveImpacts(this.impactsThisTick);
 
+    // --- The opponent's feedback loop (V5) -------------------------------------------------------
+    //
+    // The single most important line added in this version. Everything the V5 opponent decides rests
+    // on knowing whether its own shots work, and it cannot learn that without being told. Until this
+    // call existed the opponent could fire five shells into a 400 mm frontal plate, watch all five
+    // bounce, and then do exactly the same thing again — because nothing in the simulation ever told
+    // it what had happened. That is OD-11, and it was never an armour problem.
+    //
+    // Only `incomingCombat` is passed: the results of shells that struck **the player**, which are by
+    // construction the shells the opponent fired. `combat` holds hits on the opponent and is the
+    // player's business, not the AI's. The controller is told only whether a shell penetrated, never
+    // how much damage it did or what the player's remaining hit points are, so it cannot cheat.
+    this.reportCombatToOpponent();
+
     this.tickCountInternal += 1;
+  }
+
+  /**
+   * Tells the opponent what its own shells did to the player this tick.
+   *
+   * Called once per tick from `tick`, after combat has resolved. Kept as its own method because the
+   * ordering is the point: the feedback has to arrive *after* `resolveImpacts` has applied damage and
+   * *before* the next `think`, or the opponent would act on a shot whose result it has not seen yet.
+   */
+  private reportCombatToOpponent(): void {
+    if (this.enemyController === null || this.incomingCombat.length === 0) {
+      return;
+    }
+    for (const result of this.incomingCombat) {
+      // An `armour-miss` is not counted. The opponent cannot distinguish "bounced off" from "went past"
+      // from inside its tank, and treating a plain miss as evidence that the *armour* is defeating it
+      // would send it repositioning because its aim was slightly off — a different problem with a
+      // different fix. The plate-matching in `resolveCombat` already means a vehicle-bound impact is a
+      // real plate strike.
+      if (result.kind !== 'armour-miss') {
+        this.enemyController.observeCombat(result.kind === 'penetrated');
+      }
+    }
   }
 
   /**
