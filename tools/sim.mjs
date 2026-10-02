@@ -29,7 +29,7 @@ const TICKS_PER_SECOND = 60;
  * deliberate: a batch that silently ran with a default the caller did not intend would produce numbers
  * that look valid and describe the wrong experiment, which is worse than refusing to start.
  */
-function parseArgs(argv, defaults, scenarios, isScenarioId, usage) {
+function parseArgs(argv, defaults, scenarios, isScenarioId, usage, maps) {
   const options = { ...defaults };
   let json = false;
 
@@ -57,6 +57,20 @@ function parseArgs(argv, defaults, scenarios, isScenarioId, usage) {
       case '--seconds':
         options.maxTicks = readNumber(argv, ++i, '--seconds') * TICKS_PER_SECOND;
         break;
+      case '--map': {
+        // The only map V6 ships. Named rather than defaulted, so a future second map is an
+        // intentional addition and so a saved report says which world produced it.
+        const name = argv[++i];
+        if (name !== 'ashford-valley') {
+          return {
+            kind: 'error',
+            message: `--map must be ashford-valley (got "${name ?? 'nothing'}"). ` +
+              'Omit --map entirely to run the legacy V5 arena.',
+          };
+        }
+        options.map = maps.ashfordValley;
+        break;
+      }
       case '--scenario': {
         const name = argv[++i];
         if (name === undefined || !isScenarioId(name)) {
@@ -120,12 +134,13 @@ async function loadRunner() {
     optimizeDeps: { noDiscovery: true },
   });
   try {
-    const [runner, report, scenarios] = await Promise.all([
+    const [runner, report, scenarios, maps] = await Promise.all([
       server.ssrLoadModule('/src/tools/headless/batch-runner.ts'),
       server.ssrLoadModule('/src/tools/headless/report.ts'),
       server.ssrLoadModule('/src/tools/headless/scenarios.ts'),
+      server.ssrLoadModule('/src/core/world/maps/ashford-valley.ts'),
     ]);
-    return { ...runner, ...report, ...scenarios };
+    return { ...runner, ...report, ...scenarios, ...maps };
   } finally {
     // Closed as soon as the modules are loaded: the code is fully evaluated by then, and a lingering
     // server would keep the process alive after the results were printed.
@@ -146,6 +161,7 @@ async function main() {
       SCENARIOS,
       isScenarioId,
       formatUsage(),
+      { ashfordValley: loaded.ASHFORD_VALLEY },
     );
   } catch (error) {
     process.stdout.write(`${error.message}\n\n${formatUsage()}\n`);

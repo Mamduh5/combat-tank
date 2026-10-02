@@ -2,6 +2,7 @@ import { Simulation } from '../../core/sim/world.js';
 import { Battle } from '../../core/battle/battle.js';
 import { PLACEHOLDER_TANK } from '../../shared/placeholder-tank.js';
 import { ENEMY_TANK } from '../../shared/enemy-tank.js';
+import type { BattlefieldData } from '../../core/world/battlefield.js';
 import { DEFAULT_SCENARIO, playerScript, type ScenarioId } from './scenarios.js';
 
 /**
@@ -104,6 +105,14 @@ export interface BatchOptions {
   readonly scenario: ScenarioId;
   /** Tick budget per battle. Reaching it is a `timeout`, not a runner failure. */
   readonly maxTicks: number;
+  /**
+   * Which battlefield to fight on, added in V6.
+   *
+   * Optional rather than required so every V5F-era invocation keeps producing the same numbers: a
+   * harness that silently changed maps would make its own history incomparable. Pass `ashford-valley`
+   * explicitly to exercise V6, or omit it to reproduce a V5 result exactly.
+   */
+  readonly map?: BattlefieldData;
 }
 
 /** The defaults, exposed so the CLI and the tests cannot disagree about them. */
@@ -120,11 +129,19 @@ export const DEFAULT_BATCH_OPTIONS: BatchOptions = {
  * Exported on its own so a single failing seed can be replayed without a batch around it, which is what
  * a developer reaches for when the batch hands them a suspect seed.
  */
-export function runBattle(seed: number, scenario: ScenarioId, maxTicks: number): BattleReport {
+export function runBattle(
+  seed: number,
+  scenario: ScenarioId,
+  maxTicks: number,
+  map?: BattlefieldData,
+): BattleReport {
   const simulation = new Simulation({
     vehicle: PLACEHOLDER_TANK,
     target: ENEMY_TANK,
     enemySeed: seed,
+    // Spread rather than conditionally assigned: passing `undefined` is the documented way to get
+    // the legacy arena, and an explicit ternary here would make the two paths differ invisibly.
+    ...(map === undefined ? {} : { map }),
   });
   const battle = new Battle(simulation);
   const script = playerScript(scenario);
@@ -261,7 +278,9 @@ export function runBatch(options: Partial<BatchOptions> = {}): BatchReport {
   const resolved: BatchOptions = { ...DEFAULT_BATCH_OPTIONS, ...options };
   const battles: BattleReport[] = [];
   for (let i = 0; i < resolved.battles; i += 1) {
-    battles.push(runBattle(resolved.seedStart + i, resolved.scenario, resolved.maxTicks));
+    battles.push(
+      runBattle(resolved.seedStart + i, resolved.scenario, resolved.maxTicks, resolved.map),
+    );
   }
   return aggregate(resolved, battles);
 }

@@ -86,6 +86,7 @@ export function formatUsage(): string {
     '                   Default mixed (a scripted sequence of the others).',
     '  --ticks <n>       Tick budget per battle. Default 7200 (2 minutes at 60 Hz).',
     '  --seconds <n>     Same as --ticks, in seconds. Convenient to read.',
+    '  --map <name>      Battlefield. Only ashford-valley in V6. Omit for the legacy V5 arena.',
     '  --json            Print the full report as JSON instead of a summary.',
     '  --help            This message.',
     '',
@@ -95,6 +96,7 @@ export function formatUsage(): string {
     '  npm run sim -- --scenario parked              the frontal-armour case from ADR-0016',
     '  npm run sim -- --seed 4242 --battles 1        replay one seed exactly',
     '  npm run sim -- --battles 5 --json > r.json   save a report',
+    '  npm run sim -- --map ashford-valley       the V6 battlefield',
   ].join('\n');
 }
 

@@ -1,3 +1,4 @@
+import type { ContactState } from '../../core/spotting/spotting.js';
 import { radToDeg, wrapAngle } from '../../core/math/index.js';
 import type { VehicleTelemetry } from '../../core/vehicle/vehicle-state.js';
 import type { CombatResult } from '../../core/combat/combat-resolver.js';
@@ -48,6 +49,8 @@ export class Hud {
   private readonly targetHpMax: HTMLElement | null;
   private readonly targetHpFill: HTMLElement | null;
   private readonly targetRange: HTMLElement | null;
+  /** V6 contact readout, hidden until the player has seen the enemy at least once. */
+  private readonly targetContact: HTMLElement | null;
   /** First-launch briefing, dismissed once the player starts playing. */
   private readonly briefing: HTMLElement | null;
   /** Incoming-hit banner: the player's own armour taking a hit. */
@@ -123,6 +126,7 @@ export class Hud {
     this.targetHpMax = root.getElementById('target-hp-max');
     this.targetHpFill = root.getElementById('target-hp-fill');
     this.targetRange = root.getElementById('target-range');
+    this.targetContact = root.getElementById('target-contact');
     this.briefing = root.getElementById('hud-briefing');
 
     this.incomingBanner = root.getElementById('incoming-banner');
@@ -386,6 +390,40 @@ export class Hud {
       this.targetHpFill.classList.toggle('critical', fraction <= 0.25);
     }
   }
+  /**
+   * Shows what the player currently knows about the enemy: in contact, or contact lost.
+   *
+   * Added in V6 with the spotting system. Deliberately one word and one colour. The V6 brief asks
+   * for the player to be able to tell whether an enemy is detected, when it is lost, and when it is
+   * reacquired - and all three of those are answerable from this line plus the moment it changes. A bar,
+   * a percentage or a timer would be more information and less usable, because a player mid-fight
+   * reads a shape, not a number.
+   *
+   * Hidden entirely before first contact: "no contact" against an enemy the player has never seen
+   * is not information, it is noise, and it would sit on screen for the whole approach.
+   *
+   * @param state the current contact state
+   * @param everSeen whether the enemy has been seen at all this battle
+   */
+  setContact(state: ContactState, everSeen: boolean): void {
+    const element = this.targetContact;
+    if (element === null) {
+      return;
+    }
+    if (!everSeen || state === 'undetected') {
+      element.hidden = true;
+      return;
+    }
+    element.hidden = false;
+    if (state === 'lost') {
+      setText(element, 'CONTACT LOST');
+      element.dataset.state = 'lost';
+    } else {
+      setText(element, 'IN CONTACT');
+      element.dataset.state = 'detected';
+    }
+  }
+
 
   /**
    * Shows that the *player* has been hit, as distinct from a shot they took.

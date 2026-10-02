@@ -2,6 +2,7 @@ import { makeInput, type InputCommand } from '../../shared/input.js';
 import { atan2, cos, sin, vec3, type Vec3 } from '../math/index.js';
 import { Rng } from '../rng/index.js';
 import type { Terrain } from '../world/terrain.js';
+import type { Battlefield } from '../world/battlefield.js';
 import type { Tank } from '../vehicle/tank.js';
 import { gunDirection } from '../vehicle/turret.js';
 import { buildWorldPlates } from '../armor/geometry.js';
@@ -331,6 +332,43 @@ export class EnemyController {
    * @param seed RNG seed for the opponent's aim scatter and flank preference. Exposed so a test can
    *   reproduce a specific encounter exactly, and so the encounter's randomness is never ambient.
    */
+  /**
+   * The battlefield, used for every question about **visibility**.
+   *
+   * Separate from `terrain`, which the controller still uses for **driving**. That split is the whole
+   * of the V6 integration: a tank has to be able to see *over* a hill and *past* a building, and a
+   * controller that asked the height field whether it could see would happily shoot at a player standing
+   * behind a warehouse. The two questions are genuinely different, so they ask different objects.
+   *
+   * Left `null` for the legacy arena, where there are no structures and the two answers coincide. A
+   * controller without a battlefield therefore behaves exactly as V5 did, which is what keeps every
+   * existing AI test valid.
+   */
+  private battlefield: Battlefield | null = null;
+
+  /** Attaches a battlefield. Called by the simulation once the world exists. */
+  attachBattlefield(battlefield: Battlefield): void {
+    this.battlefield = battlefield;
+  }
+
+  /**
+   * Whether the opponent can see a world point from its own gun.
+   *
+   * The single seam where V6 visibility enters the V5 controller. Everything else in the file keeps
+   * asking about terrain for driving, and this is the one place that has to know better.
+   *
+   * @param eye the observer's gun position, normally the trunnion
+   * @param target the point to see, normally the centre of a plate
+   * @param steps terrain sampling density, see `Terrain.hasLineOfSight`
+   * @param marginM clearance required below the sight line, see `Terrain.hasLineOfSight`
+   */
+  private canSeeFrom(eye: Vec3, target: Vec3, steps = 24, marginM = 0.6): boolean {
+    if (this.battlefield === null) {
+      return this.terrain.hasLineOfSight(eye, target, steps, marginM);
+    }
+    return this.battlefield.canSee(eye, target, steps, marginM);
+  }
+
   constructor(enemy: Tank, player: Tank, terrain: Terrain, seed = ENEMY_DEFAULT_SEED) {
     this.enemy = enemy;
     this.player = player;
@@ -460,7 +498,7 @@ export class EnemyController {
     const rangeM = distance(eye, playerCentre);
     this.lastRangeM = rangeM;
 
-    const canSeePlayer = this.terrain.hasLineOfSight(eye, playerCentre);
+    const canSeePlayer = this.canSeeFrom(eye, playerCentre);
     this.lastSawPlayer = canSeePlayer;
 
     if (canSeePlayer) {
@@ -526,7 +564,7 @@ export class EnemyController {
       // Per-plate sight test from the gun to the plate itself, not to the hull centre. Fewer samples
       // and a smaller margin than the vehicle-wide test: this is asking "can I see this plate", and a
       // plate peeking over a rise should count as visible even when the hull behind it is not.
-      const visible = vehicleVisible && this.terrain.hasLineOfSight(eye, plate.center, 16, 0.35);
+      const visible = vehicleVisible && this.canSeeFrom(eye, plate.center, 16, 0.35);
       assessments.push(assessPlate(eye, plate, this.enemy.definition, visible));
     }
     return assessments;

@@ -359,3 +359,30 @@ stationary player and roughly halves it against a fleeing one — a real trade-o
 correct outcome was to record it (OD-15) and leave it, because the version's gameplay objective had
 already been signed off. A batch that reports an uncomfortable truth is working; silencing it is not.
 
+## V6 additions: working on the battlefield
+
+**One map description, three consumers.** Terrain, hard cover and concealment are data in the core, and
+the ballistics, the line-of-sight test and the renderer all read that same data. The reason to insist on
+one description is not tidiness: a building that exists only in the renderer produces a player watching a
+shell pass through a wall, and an opponent shooting through one. The renderer cannot be allowed its own
+list, because the first symptom of drift is a bug that looks like a physics problem.
+
+**`blocksSight` is a flag, not a height.** A waist-high barrier that stops shells and not sight is
+different cover from a building, and collapsing the two forces a choice between two genuinely different
+pieces of cover. The test that pins it is worth keeping: the same line, stopped as a shell and clear as
+sight.
+
+**Authored spawns beat a terrain scan.** V4 scanned for a "consistent" opening and it was how the
+encounter ended up on a plateau with the opponent nowhere in sight. On a designed map, where the fight
+starts is a level-design decision. Keep the scan as the fallback for a map that does not say, or every
+pre-existing test silently moves.
+
+**The batch harness finds map defects the eye cannot.** `npm run sim -- --map ashford-valley` found
+spawns 266 m apart on a map with a 200 m sight range: neither tank could see the other, so the opponent
+searched for five minutes and fired nothing. Every screenshot looked fine. Before changing AI behaviour
+in response to a surprising batch result, check whether the *map* is the thing that is wrong.
+
+**A test at a rule's boundary catches what a playtest will not.** The spotting observer-penalty rule
+multiplied unconditionally and quietly shortened everyone's sight range to 170 m on open ground. No
+screenshot showed it and no playtest would reliably have; a test asserting the range boundary did,
+immediately.

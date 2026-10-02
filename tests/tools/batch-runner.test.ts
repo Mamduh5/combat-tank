@@ -8,6 +8,7 @@ import {
 } from '../../src/tools/headless/batch-runner.js';
 import { formatJson, formatSummary, formatUsage } from '../../src/tools/headless/report.js';
 import { isScenarioId, playerScript, SCENARIOS } from '../../src/tools/headless/scenarios.js';
+import { ASHFORD_VALLEY } from '../../src/core/world/maps/ashford-valley.js';
 import { NEUTRAL_INPUT } from '../../src/shared/input.js';
 
 /**
@@ -300,4 +301,67 @@ describe('the report', () => {
   });
 });
 
+describe('V6: the harness on a battlefield', () => {
+  it('fights the same battle twice on a map, identically', () => {
+    // The determinism guarantee has to hold on the V6 map too, not only on the legacy arena. Ashford
+    // Valley is the world the player actually plays in, so a seed that reproduces there is the one
+    // worth being able to hand to someone.
+    const options = {
+      battles: 2,
+      seedStart: 4242,
+      scenario: 'mixed' as const,
+      maxTicks: SHORT_TICKS,
+      map: ASHFORD_VALLEY,
+    };
+    expect(runBatch(options)).toEqual(runBatch(options));
+  });
 
+  it('produces a different fight on a different map from the same seed', () => {
+    // The converse, and the one that would catch a `--map` flag that was accepted and then ignored.
+    // Cover, terrain and spawns all differ, so the battles cannot coincide.
+    const onMap = runBattle(7, 'mixed', SHORT_TICKS, ASHFORD_VALLEY);
+    const onArena = runBattle(7, 'mixed', SHORT_TICKS);
+    expect(onMap).not.toEqual(onArena);
+  });
+
+  it('keeps damaging the player on the authored map, so no fight can stall forever', () => {
+    // The V6 question the harness has to answer about a new map: could two tanks spend a whole
+    // budget unable to affect each other? On a map full of hard cover, easily - and the failure looks
+    // healthy in every other metric, because both vehicles are intact and nothing threw.
+    //
+    // Measured on Ashford Valley: every seed lands roughly 5-6 penetrating shells in the first two
+    // minutes, which is most of the player's 1000 hit points. A budget long enough to kill is therefore
+    // long enough to prove the fight is progressing, and the assertion below is on *damage dealt*
+    // rather than on a decision, because it is the honest signal: a battle that damages nothing has
+    // stalled, whether or not the clock eventually ran out.
+    //
+    // 18000 ticks = five minutes. Chosen because it comfortably exceeds the measured ~190 s needed to
+    // destroy a parked player, with room to spare, so a seed that deals no damage has genuinely failed
+    // rather than merely been cut short.
+    const report = runBatch({
+      battles: 3,
+      seedStart: 1,
+      maxTicks: 18000,
+      scenario: 'parked',
+      map: ASHFORD_VALLEY,
+    });
+    // Every seed, not the batch in aggregate: one seed working would hide five that do not.
+    for (const battle of report.battles) {
+      expect(battle.damageDealt).toBeGreaterThan(0);
+    }
+  });
+
+  it('leaves the combat rules intact on the V6 map', () => {
+    // The V6 brief is explicit that the V4/V5 combat experience must survive the terrain work. The
+    // cheapest honest check is that a battle on the new map still produces penetrations: a map that
+    // silently stopped letting shells through would satisfy every structural test and fail the game.
+    const report = runBatch({
+      battles: 4,
+      // Five minutes, for the same measured reason as the test above.
+      maxTicks: 18000,
+      scenario: 'parked',
+      map: ASHFORD_VALLEY,
+    });
+    expect(report.totals.penetrations).toBeGreaterThan(0);
+  });
+});

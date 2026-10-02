@@ -548,6 +548,9 @@ The runner earned its keep twice over, in ways worth recording:
 
 ## V6 — Battlefield & Terrain Tactics
 
+**Status: complete.** See the V6 outcome section at the end of this version for what was built, what
+the harness found, and what is still unverified by a human.
+
 **Goal:** make the map matter. Space, cover, and knowledge should decide fights.
 
 - **Player-visible result:** the player fights on a purpose-built map with hills, structures, cover,
@@ -587,6 +590,101 @@ The runner earned its keep twice over, in ways worth recording:
 - **Depends on:** V5 (AI navigation must work over the new terrain), V4 (match structure), V1–V3.
 
 ---
+
+### V6 outcome
+
+**The battlefield: Ashford Valley**
+
+One map, authored rather than generated. The design is stated as five questions the map makes
+askable, and every feature exists to make one of them askable:
+
+1. *Do I cross the open lane?* The Cut, a bare firing lane through the middle, with concrete barriers
+   at its edges so a committed cross is coverable but never safe.
+2. *Can I stay hull-down?* Kestrel Ridge along the west: high enough to see the whole valley, with a
+   long back slope so a tank behind it shoots over cover rather than over its own track.
+3. *Should I take the low road?* Millbrook Cut, a depression running north-east, below the sight
+   line of the valley floor. Slow, a dead end if seen in it, and the way to the flank unseen.
+4. *I lost sight of them - where will they reappear?* Two answers only: the Culvert gap in the
+   north-west rocks, and the farm track past the red barn. Learning those is the map's real skill.
+5. *Can I use those trees?* Ashford Wood is heavy concealment; the southern scrub line is light. The
+   wood works, the scrub does not, and the difference is learnable.
+
+The map is deliberately **lopsided**: the ridge and the cut both favour the player's side, the enemy has
+the outpost and the barn but no equivalent high ground. There is no single dominant position, and
+there is a contested one.
+
+**Authored maps**
+`BattlefieldData` in `src/core/world/battlefield.ts`: terrain config, structures, concealment
+zones, named places, and two spawns. One authored map lives in `src/core/world/maps/`. Omitting
+`map` from `Simulation` still produces the V5 arena, so every pre-V6 test is unaffected.
+
+**Environment art: all generated, no external assets**
+
+`src/client/render/battlefield-props.ts` builds everything from geometry primitives at load time,
+driven by the same map data the simulation uses. **Provenance: none required - nothing is sourced, so
+there is no licence, attribution or redistribution condition.** Buildings get pitched roofs, rocks are
+clusters of tilted blocks, and each concealment zone is drawn as trees or bushes. This is prototype
+quality by intent: it reads as an intentional environment rather than a finished one, and it is not final
+art.
+**Hard cover**
+
+`src/core/world/structures.ts`. Axis-aligned boxes with a yaw, a height, and a `blocksSight` flag. Three
+systems read the same list: ballistics treats them as shell obstacles, line of sight tests against them,
+and the renderer builds meshes from them. A structure that is not in the map data does not exist
+anywhere; one that is, is solid everywhere. **`blocksSight: false` barriers are the important case** -
+they stop shells and not sight, which is what makes crossing The Cut a decision rather than a formality.
+
+**Line of sight**
+
+One object: `Battlefield.hasLineOfSight`. Terrain is sampled as a height field, structures as solid
+volumes, and the result names what blocked it. Every system that needs to know if something is
+visible asks this object, so the renderer cannot show a wall the simulation thinks is missing. The V5
+controller was given the battlefield separately from its terrain, because it needs a different object for
+a different question: what it can drive over, versus what it can see past.
+
+**Spotting**
+
+One legible rule, in `src/core/spotting/spotting.ts`: a vehicle is detected when it is within detection
+range, has line of sight, and is not concealed too much. Beyond that, within 1.6x the range, **firing
+reveals a vehicle** - so hiding helps, but shooting can give you away. It is one number and one sentence
+on purpose, and it is capped so a blind shot cannot paint an enemy on the HUD from the far corner.
+`ContactTracker` turns the per-tick answers into `undetected` / `detected` / `lost`, remembers the last known
+position, and holds contact through a 1.2 s occlusion so a vehicle crossing a treeline edge does not
+strobe the indicator.
+
+**Concealment**
+
+Two strengths with a measurable difference: `heavy` (factor 0.40) and `light` (0.72), with a smooth
+falloff to the edge of a zone so there is no visible line on the ground. Every zone in the core is drawn by
+the renderer - the distinction between gameplay and decorative vegetation is that decorative props are
+*not in the core list at all*, and that is stated rather than left to be discovered.
+
+**Player feedback**
+
+One line in the enemy panel: `IN CONTACT` in green, `CONTACT LOST` in amber, hidden entirely before
+first sighting - "no contact" against an enemy never seen is noise, not information. The HUD reads the
+simulation's tracker rather than computing visibility itself, so it cannot disagree with it.
+
+**What the harness found**
+
+`npm run sim -- --map ashford-valley` earned its keep immediately, and twice:
+
+- It caught a **map defect** the eye would not have. The first spawn layout put the tanks 266 m apart,
+  beyond the 200 m sight range. Neither could see the other, so the opponent searched forever: zero
+  shells, `seen, gun idle: 0`, `final intent: search`, for the whole five minutes. Two tanks that cannot
+  see each other and will not move toward each other is a standoff, not a tactical opening. The spawns are
+  now ~190 m apart, and a test pins the property that both sides actually engage.
+- It showed a **design bug in a rule**, in the spotting code: the observer-concealment penalty was
+  multiplying unconditionally, quietly shortening *everyone's* sight range to 170 m on open ground -
+  a rule nobody intended and not one anybody could learn. A test at the range boundary caught it; a
+  playtest might not have.
+
+**Not verified by a human**
+
+This milestone is heavily about route choice, terrain readability and whether cover feels useful, and
+**none of that has been played.** Everything above was verified by measurement and by looking at
+screenshots; no human has driven Ashford Valley and asked whether it is fun to fight on. See the report for
+what specifically remains open.
 
 ## V7 — Tactical Team Skirmish
 

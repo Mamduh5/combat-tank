@@ -3,7 +3,12 @@ import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
 import { PLACEHOLDER_TANK as SPAWN_VEHICLE } from '../../shared/placeholder-tank.js';
 import { atan2, cos, sin, vec3, type Vec3 } from '../math/index.js';
 import { Tank, type VehicleTelemetry } from '../vehicle/tank.js';
-import { Terrain, DEFAULT_TERRAIN_CONFIG, type TerrainConfig } from '../world/terrain.js';
+import { DEFAULT_TERRAIN_CONFIG, type Terrain, type TerrainConfig } from '../world/terrain.js';
+import { Battlefield, type BattlefieldData } from '../world/battlefield.js';
+import { structuresAsObstacles, type StaticObstacleLike } from '../world/structures.js';
+import { evaluateDetection, type SpottingSubject } from '../spotting/spotting.js';
+import { ContactTracker } from '../spotting/contact-tracker.js';
+import { OPEN_GROUND, type ConcealmentSample } from '../world/concealment.js';
 import { ShellFlightSystem } from '../ballistics/flight-system.js';
 import type { ShellImpact } from '../ballistics/impact.js';
 import type { ShellObstacle } from '../ballistics/shell.js';
@@ -62,9 +67,6 @@ const TARGET_DISTANCE_M = 60;
  * side closing distance first.
  */
 const V4_OPENING_DISTANCE_M = 55;
-
-/** Shared empty obstacle list, so a world with no opponent allocates nothing per tick. */
-const EMPTY_OBSTACLES: readonly ShellObstacle[] = Object.freeze([]);
 
 /** Shared empty combat list, so a tick with no vehicle impact allocates nothing. */
 const EMPTY_COMBAT: readonly CombatResult[] = Object.freeze([]);
@@ -457,6 +459,18 @@ export interface SimulationOptions {
   readonly spawn?: Vec3;
   readonly spawnHeadingRad?: number;
   readonly terrain?: TerrainConfig;
+
+  /**
+   * The battlefield to fight on, added in V6.
+   *
+   * When supplied it takes precedence over `terrain`, because the map's terrain is part of its design:
+   * its cover, structures and spawns were all placed against that specific surface. Supplying both is
+   * allowed and the map wins, which is stated here rather than left as a silent precedence rule.
+   *
+   * Omitting it produces the V4/V5 legacy arena with no cover and no concealment, so every existing
+   * test keeps the world it was written against.
+   */
+  readonly map?: BattlefieldData;
   /**
    * Optional stationary target to shoot at, added in V3.
    *
@@ -516,6 +530,16 @@ function headingToward(from: Vec3, to: Vec3): number {
 }
 
 export class Simulation {
+  /**
+   * The battlefield: terrain, hard cover, and concealment.
+   *
+   * V6 introduced this object and it now owns the terrain. The `terrain` field below is kept because
+   * locomotion, ballistics and the renderer all need the height field directly, and threading a second
+   * object through every existing call site would be churn for no gain. But the *terrain alone* is no
+   * longer the whole world: anything asking "can I see that" or "would a shell stop there" must ask the
+   * battlefield, or it will be right about hills and wrong about buildings.
+   */
+  readonly battlefield: Battlefield;
   readonly terrain: Terrain;
   readonly vehicle: Tank;
   readonly tickRateHz: number;
@@ -554,6 +578,24 @@ export class Simulation {
   /** Every shell currently in flight. */
   readonly shells: ShellFlightSystem;
 
+  /**
+   * Hard cover, presented to the ballistics as shell obstacles.
+   *
+   * Held separately from the vehicle obstacle cache because that cache is rebuilt on every `restart` and
+   * holds only vehicles, and because a structure is immutable world geometry while a vehicle moves.
+   * Keeping them apart also means the shell step can concatenate the two rather than mutate one,
+   * so no caller can accidentally get a wall in the vehicle list.
+   */
+  private readonly staticObstacles: readonly StaticObstacleLike[];
+
+  /**
+   * What the player currently knows about the opponent, added in V6.
+   *
+   * Read by the HUD and by tests; never written to by either. The tracker owns the transitions, so a
+   * consumer cannot put the game into a state the simulation does not believe it is in.
+   */
+  readonly playerContact: ContactTracker;
+
   /** Total fixed ticks executed since construction. A simulation clock in ticks, not seconds. */
   /**
    * Ticks executed since construction, as a simulation clock in ticks rather than seconds.
@@ -572,19 +614,59 @@ export class Simulation {
   private accumulatorSeconds = 0;
   private readonly dtSeconds: number;
 
+  /** The opponent's shell count as of the last tick, so a fire request can be spotted. */
+  private enemyShotsSeenLastTick = 0;
+
+  /** How concealed the player currently is, for the HUD. Recomputed every tick. */
+  playerConcealment: ConcealmentSample = OPEN_GROUND;
+
   constructor(options: SimulationOptions) {
     // Retained so `restart` can rebuild the opening positions without the caller re-supplying them.
     // The options are treated as immutable after construction.
     this.options = options;
-    this.terrain = new Terrain(options.terrain ?? DEFAULT_TERRAIN_CONFIG);
+    // A supplied map wins over a supplied terrain config: on an authored battlefield the map's terrain
+    // is part of its design, and quietly substituting a flat surface would produce a map whose ground
+    // does not match the one its features were placed for.
+    this.battlefield =
+      options.map !== undefined
+        ? new Battlefield(options.map)
+        : new Battlefield({
+            id: 'legacy-arena',
+            displayName: 'Legacy Arena',
+            terrain: options.terrain ?? DEFAULT_TERRAIN_CONFIG,
+            structures: [],
+            concealment: [],
+            zones: [],
+            playerSpawn: { x: 0, z: 0, headingRad: 0 },
+            enemySpawn: { x: 0, z: 0, headingRad: 0 },
+          });
+    this.terrain = this.battlefield.terrain;
+    // Hard cover is a shell obstacle from the moment the world is built, not added later. A shell that
+    // could pass through a building for even one tick would make every guarantee about cover false.
+    this.staticObstacles = structuresAsObstacles(this.battlefield.structures);
     this.tickRateHz = TICK_HZ;
     this.dtSeconds = TICK_DT_SECONDS;
     this.shells = new ShellFlightSystem();
 
-    const spawn = options.spawn ?? this.defaultSpawn();
+    // **Where the fight starts.** V6 change: an authored map states its own spawns, because on a
+    // designed battlefield *where the two tanks begin* is a level-design decision and not something a
+    // terrain scan should be trusted with. The V4/V5 scan is kept as the fallback for a map that does
+    // not say, so every existing test keeps the opening it was written against.
+    const authoredSpawn = this.battlefield.playerSpawnAtTerrain();
+    const spawn = options.spawn ?? authoredSpawn ?? this.defaultSpawn();
+    // Heading resolution, in order of authority: an explicit option, then the map's authored facing,
+    // then the legacy zero. Written as three separate statements because the first version chained `??`
+    // with a ternary, and `a ?? b !== null ? x : y` parses as `(a ?? (b !== null)) ? x : y` — a number
+    // used as a condition, which type-checks happily and then means nothing at all.
+    let spawnHeading = 0;
+    if (options.spawnHeadingRad !== undefined) {
+      spawnHeading = options.spawnHeadingRad;
+    } else if (authoredSpawn !== null) {
+      spawnHeading = this.battlefield.playerSpawn.headingRad;
+    }
     this.vehicle = new Tank(options.vehicle, {
       position: spawn,
-      headingRad: options.spawnHeadingRad ?? 0,
+      headingRad: spawnHeading,
     });
 
     // The target is placed by a search rather than a fixed offset, so that it is visible from the
@@ -596,21 +678,29 @@ export class Simulation {
     // presenting its most vulnerable plate while unable to return fire let the player delete it in
     // four shots. Facing the player means the encounter opens on the enemy's strongest frontal
     // armour, so the first exchange is a contest the player has to earn rather than a gift.
+    //
+    // V6 change: an authored map states the opponent's spawn too, and the search is skipped entirely.
+    // The scan exists to *find* a fair opening on ground that was generated; a map that already knows
+    // where the fight should happen should not have that overruled by arithmetic.
+    const authoredTarget = this.battlefield.enemySpawnAtTerrain();
     const targetPosition = options.target === undefined
       ? null
-      : findTargetPosition(
+      : (authoredTarget ?? findTargetPosition(
           this.terrain,
           spawn,
-          options.spawnHeadingRad ?? 0,
+          authoredSpawn === null ? (options.spawnHeadingRad ?? 0) : this.battlefield.playerSpawn.headingRad,
           options.openingDistanceM ?? V4_OPENING_DISTANCE_M,
-        );
+        ));
 
     this.target =
       options.target === undefined || targetPosition === null
         ? null
         : new Tank(options.target, {
             position: targetPosition,
-            headingRad: headingToward(targetPosition, spawn),
+            // An authored spawn carries its own facing; a scanned one must be turned to face the player.
+            headingRad: authoredTarget === null
+              ? headingToward(targetPosition, spawn)
+              : this.battlefield.enemySpawn.headingRad,
           });
 
     // Both vehicles are shell obstacles. The shooter is excluded inside the shell system itself, by
@@ -625,6 +715,18 @@ export class Simulation {
       this.target === null || options.targetIsOpponent === false
         ? null
         : new EnemyController(this.target, this.vehicle, this.terrain, options.enemySeed);
+
+    // The controller gets the battlefield separately from its terrain, because it needs a different
+    // object for a different question: terrain to know what it can drive over, the battlefield to know
+    // what it can see past. Handing it only the terrain would make it shoot through buildings.
+    this.enemyController?.attachBattlefield(this.battlefield);
+
+    // What the *player* knows about the opponent, added in V6.
+    //
+    // Owned by the simulation rather than by the client, because detection is a rule about the world
+    // and not about what is drawn: a HUD that computed visibility itself would be a second, disagreeing
+    // implementation of exactly the thing the V6 brief requires to be consistent.
+    this.playerContact = new ContactTracker();
 
     // Refilled in place, never reassigned: `shellObstacles` hands this array to the shell system each
     // tick, and a fresh array per tick would allocate for no benefit.
@@ -648,22 +750,37 @@ export class Simulation {
    */
   restart(): void {
     const options = this.options;
-    const spawn = options.spawn ?? this.defaultSpawn();
-    const headingRad = options.spawnHeadingRad ?? 0;
+    // The same resolution the constructor performs, so a restart genuinely returns the battle to its
+    // opening state. Repeating the logic here is deliberate rather than accidental duplication: the
+    // constructor's version reads local variables this method has no access to, and the alternative -
+    // reconstructing the world - is the thing ``restart`` exists to avoid.
+    const authoredSpawn = this.battlefield.playerSpawnAtTerrain();
+    const spawn = options.spawn ?? authoredSpawn ?? this.defaultSpawn();
+    const headingRad =
+      options.spawnHeadingRad ??
+      (authoredSpawn === null ? 0 : this.battlefield.playerSpawn.headingRad);
 
     this.vehicle.reset(spawn, headingRad);
 
+    // Authored spawn again, for the same reason as the player's: a map that states where the opponent
+    // begins must not have that overruled by a scan on every restart.
+    const authoredTarget = this.battlefield.enemySpawnAtTerrain();
     const targetPosition =
       options.target === undefined
         ? null
-        : findTargetPosition(
+        : (authoredTarget ?? findTargetPosition(
             this.terrain,
             spawn,
             headingRad,
             options.openingDistanceM ?? V4_OPENING_DISTANCE_M,
-          );
+          ));
     if (this.target !== null && targetPosition !== null) {
-      this.target.reset(targetPosition, headingToward(targetPosition, spawn));
+      this.target.reset(
+        targetPosition,
+        authoredTarget === null
+          ? headingToward(targetPosition, spawn)
+          : this.battlefield.enemySpawn.headingRad,
+      );
     }
 
     this.enemyController?.restart();
@@ -678,6 +795,10 @@ export class Simulation {
     this.combatThisTick = EMPTY_COMBAT;
     this.playerCombatThisTick = EMPTY_COMBAT;
     this.enemySeesPlayer = false;
+    // Contact is memory, and a restart that left the player still tracking an enemy about to respawn
+    // across the map would show a live contact marker for a vehicle that has not moved yet.
+    this.playerContact.reset();
+    this.enemyShotsSeenLastTick = 0;
   }
 
   /**
@@ -688,14 +809,34 @@ export class Simulation {
    * nothing next to the shell integration itself.
    */
   private shellObstacles(): readonly ShellObstacle[] {
+    // Hard cover first, and always. A shell must stop on a building whether or not there is a target
+    // configured, so the structure list is returned even in a world with no opponent. The shooter's own
+    // hull is skipped inside the shell system by vehicle id, so the vehicle list simply contains
+    // everyone.
     if (this.target === null) {
-      return EMPTY_OBSTACLES;
+      return this.staticObstacles;
     }
-    // Both vehicles. Before V4 the player was not an obstacle at all, because nothing could shoot it;
-    // now that both sides fire, a shell must be able to strike either one. The shooter's own hull is
-    // skipped inside the shell system by vehicle id, so this list simply contains everyone.
-    return this.obstacleCache;
+    // Concatenated into one reusable array rather than pushed into `obstacleCache`: the cache is
+    // rebuilt on restart and belongs to vehicles alone, and mutating it here would make a wall
+    // indistinguishable from a tank in the shell system's own id-based self-exclusion.
+    this.combinedObstacles.length = 0;
+    for (const obstacle of this.staticObstacles) {
+      this.combinedObstacles.push(obstacle);
+    }
+    for (const obstacle of this.obstacleCache) {
+      this.combinedObstacles.push(obstacle);
+    }
+    return this.combinedObstacles;
   }
+
+  /**
+   * Reusable list holding every shell obstacle: hard cover followed by the vehicles.
+   *
+   * Mutated in place on every tick and handed straight to the shell system, so it must never be
+   * retained by a caller. Separate from `obstacleCache` because that one belongs to vehicles alone and
+   * is rebuilt on `restart`.
+   */
+  private readonly combinedObstacles: ShellObstacle[] = [];
 
   /**
    * Reusable list holding the two vehicle obstacles.
@@ -811,6 +952,12 @@ export class Simulation {
     // how much damage it did or what the player's remaining hit points are, so it cannot cheat.
     this.reportCombatToOpponent();
 
+    // --- Spotting (V6) ---------------------------------------------------------------------------
+    // Run after combat, so a shot fired this tick is already known, and before the tick counter advances
+    // so the tracker's elapsed time is the same tick every other system just stepped. The reveal rule
+    // depends on the ordering: firing has to be visible to detection in the same tick it happened.
+    this.updatePlayerContact();
+
     this.tickCountInternal += 1;
   }
 
@@ -821,6 +968,53 @@ export class Simulation {
    * ordering is the point: the feedback has to arrive *after* `resolveImpacts` has applied damage and
    * *before* the next `think`, or the opponent would act on a shot whose result it has not seen yet.
    */
+  private updatePlayerContact(): void {
+    const target = this.target;
+    if (target === null) {
+      this.playerContact.update(
+        { detected: false, rangeM: 0, effectiveRangeM: 0, blockedByCover: false },
+        { x: 0, y: 0, z: 0 },
+        false,
+        1,
+        this.dtSeconds,
+      );
+      return;
+    }
+
+    // "Fired this tick" is derived by comparing the shell count with last tick's. Watching the shell
+    // system for spawns instead would couple spotting to ballistics for a fact the vehicle already
+    // knows, and `telemetry.shotsFired` is the same number the reload cycle maintains, so the two
+    // cannot disagree.
+    const targetFiredThisTick = target.telemetry.shotsFired !== this.enemyShotsSeenLastTick;
+    this.enemyShotsSeenLastTick = target.telemetry.shotsFired;
+
+    const observer: SpottingSubject = {
+      id: this.vehicle.definition.id,
+      position: this.vehicle.state.position,
+      eyeHeightM: this.vehicle.definition.turret.ringHeightM,
+      firedThisTick: false,
+    };
+    const subject: SpottingSubject = {
+      id: target.definition.id,
+      position: target.state.position,
+      eyeHeightM: target.definition.turret.ringHeightM,
+      firedThisTick: targetFiredThisTick,
+    };
+
+    const detection = evaluateDetection(this.battlefield, observer, subject);
+    this.playerConcealment = this.battlefield.concealmentAt(
+      this.vehicle.state.position.x,
+      this.vehicle.state.position.z,
+    );
+    this.playerContact.update(
+      detection,
+      target.state.position,
+      targetFiredThisTick,
+      this.playerConcealment.factor,
+      this.dtSeconds,
+    );
+  }
+
   private reportCombatToOpponent(): void {
     if (this.enemyController === null || this.incomingCombat.length === 0) {
       return;

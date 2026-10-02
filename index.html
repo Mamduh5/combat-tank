@@ -401,6 +401,24 @@
         font-variant-numeric: tabular-nums;
       }
 
+      /* V6 contact state. Two colours and one word, deliberately: the player needs to know
+         detected-from-lost at a glance, and nothing more. No timers, no percentages, no second
+         panel - anything more competes with the hit panel for attention at the moment it matters. */
+      #hud-target .target-contact {
+        margin-top: 5px;
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        color: #7fd48a;
+      }
+
+      #hud-target .target-contact[data-state="lost"] {
+        color: #e8a33d;
+      }
+
+      #hud-target .target-contact[hidden] {
+        display: none;
+      }
+
       #hud-target.destroyed {
         border-right-color: #6b6b6b;
         opacity: 0.85;
@@ -725,7 +743,10 @@
       <div class="target-name" id="target-name">Enemy Tank</div>
       <div class="target-hp"><span id="target-hp">900</span> <span class="max" id="target-hp-max">/ 900</span></div>
       <div id="target-hp-bar"><div id="target-hp-fill"></div></div>
-      <div class="target-range" id="target-range">— m</div>
+      <div class="target-range" id="target-range">-- m</div>
+      <!-- V6 contact state. One line, shown only once the player has ever seen the enemy: a
+           "no contact" readout before first contact tells a player nothing at all. -->
+      <div class="target-contact" id="target-contact" hidden>CONTACT</div>
     </div>
 
     <!-- First-launch briefing. Two lines, dismissed on first input: enough to start, not a tutorial. -->

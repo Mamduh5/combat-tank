@@ -11,6 +11,8 @@ import { OrbitCamera } from './camera/orbit-camera.js';
 import { InputManager } from './input/input-manager.js';
 import { PhysicsWorld } from './physics/rapier-terrain.js';
 import { createScene } from './render/scene.js';
+import { buildBattlefieldProps } from './render/battlefield-props.js';
+import { ASHFORD_VALLEY } from '../core/world/maps/ashford-valley.js';
 import { CombatAudio } from './audio/combat-audio.js';
 import { ShellEffects } from './render/shell-effects.js';
 import { TankVisual } from './render/tank-visual.js';
@@ -70,6 +72,9 @@ async function bootstrap(): Promise<void> {
 
   // --- Simulation (headless core) ----------------------------------------------------
   const simulation = new Simulation({
+    // Ashford Valley, the V6 battlefield: hard cover, concealment, and hand-placed spawns. The V5 arena
+    // is still the default for any test that does not ask for a map, and stays reachable that way.
+    map: ASHFORD_VALLEY,
     vehicle: PLACEHOLDER_TANK,
     // A real opponent from V4: it drives, traverses, fires, and can be destroyed. Its input comes from
     // `EnemyController` inside the simulation, through the same `InputCommand` the player's keyboard
@@ -90,6 +95,9 @@ async function bootstrap(): Promise<void> {
   engine.setHardwareScalingLevel(1);
 
   const { scene, camera } = createScene(engine, simulation.terrain);
+  // Environment art, built from the same map data the simulation uses. See `battlefield-props.ts` for
+  // why the renderer takes the map rather than keeping its own list of things to draw.
+  const props = buildBattlefieldProps(scene, simulation.battlefield);
   const tankVisual = new TankVisual(scene, simulation.vehicle.definition, 'player');
   const orbitCamera = new OrbitCamera(camera, physics);
   const effects = new ShellEffects(scene);
@@ -279,6 +287,13 @@ async function bootstrap(): Promise<void> {
     // 7. HUD, fed from simulation values rather than anything derived from the view.
     hud.updateDriving(simulation.telemetry);
     hud.updateAimRange(aimRangeM);
+    // V6 contact state, read from the simulation rather than recomputed here. The HUD is a view: if it
+    // worked out visibility for itself it would be a second implementation of the spotting rules, and
+    // the two would eventually disagree about whether the player can see the enemy.
+    {
+      const contact = simulation.playerContact.contact;
+      hud.setContact(contact.state, contact.state !== 'undetected');
+    }
     const reloading = simulation.telemetry.gunLoadState === 'reloading';
     hud.updateReloadProgress(
       reloadProgress(simulation.vehicle.gunState, simulation.vehicle.definition.mainGun.reloadSeconds),
@@ -488,6 +503,9 @@ async function bootstrap(): Promise<void> {
       scene,
       tankVisual,
       targetVisual,
+      // Exposed so the screenshot tools can assert the environment actually built something, rather
+      // than a screenshot that happens to look empty for reasons nobody recorded.
+      props,
       /** Lets the screenshot harness drive the game without a captured pointer. */
       setInputFrame: (frame: typeof inputFrame) => {
         inputFrame = frame;
