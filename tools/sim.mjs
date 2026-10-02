@@ -61,14 +61,14 @@ function parseArgs(argv, defaults, scenarios, isScenarioId, usage, maps) {
         // The only map V6 ships. Named rather than defaulted, so a future second map is an
         // intentional addition and so a saved report says which world produced it.
         const name = argv[++i];
-        if (name !== 'ashford-valley') {
+        if (name !== 'marlowe-crossing') {
           return {
             kind: 'error',
-            message: `--map must be ashford-valley (got "${name ?? 'nothing'}"). ` +
+            message: `--map must be marlowe-crossing (got "${name ?? 'nothing'}"). ` +
               'Omit --map entirely to run the legacy V5 arena.',
           };
         }
-        options.map = maps.ashfordValley;
+        options.map = maps.marloweCrossing;
         break;
       }
       case '--scenario': {
@@ -138,7 +138,7 @@ async function loadRunner() {
       server.ssrLoadModule('/src/tools/headless/batch-runner.ts'),
       server.ssrLoadModule('/src/tools/headless/report.ts'),
       server.ssrLoadModule('/src/tools/headless/scenarios.ts'),
-      server.ssrLoadModule('/src/core/world/maps/ashford-valley.ts'),
+      server.ssrLoadModule('/src/core/world/maps/marlowe-crossing.ts'),
     ]);
     return { ...runner, ...report, ...scenarios, ...maps };
   } finally {
@@ -161,7 +161,7 @@ async function main() {
       SCENARIOS,
       isScenarioId,
       formatUsage(),
-      { ashfordValley: loaded.ASHFORD_VALLEY },
+      { marloweCrossing: loaded.MARLOWE_CROSSING },
     );
   } catch (error) {
     process.stdout.write(`${error.message}\n\n${formatUsage()}\n`);

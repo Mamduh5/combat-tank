@@ -101,6 +101,126 @@ export const COVER_MAX_SLOPE_RATIO = 0.17;
 /** Radial distance over which the bowl lifts the ground toward the centre. */
 const ARENA_BOWL_RADIUS_M = 90;
 
+/**
+ * Largest cut or fill a level corridor may make, metres.
+ *
+ * ## Why this limit exists
+ *
+ * The blend falloff alone guarantees *smoothness*, not *passability*. A corridor authored 15 m below the
+ * surrounding ground produces a smooth 15 m bank across whatever blend distance it declares, which is a
+ * cliff wearing a railway's appearance — and the whole point of adding corridors was to make the map
+ * easier to drive, not to add a new way to build a wall.
+ *
+ * Clamping the deviation means a badly authored corridor degrades into a shallow, driveable swale. It is
+ * deliberately well under the vehicle's 26-degree climb limit: with the falloff spread over the blend
+ * distance, even this depth yields a bank a tank can climb, which is verified by measurement rather than
+ * assumed — see `tests/core/rural-railway-map.test.ts`.
+ */
+const CORRIDOR_MAX_DEVIATION_M = 4;
+
+/**
+ * Saturating clamp: linear near zero, asymptotically approaching `limit`.
+ *
+ * Preferred over a hard `clamp` because a hard limit has a slope discontinuity at the boundary, which
+ * produces exactly the crease in the height field this feature exists to avoid. `d / (1 + |d|/limit)`
+ * is C1 everywhere and uses only arithmetic, keeping the core deterministic (ADR-0005).
+ */
+function softClamp(value: number, limit: number): number {
+  if (limit <= 0) {
+    return 0;
+  }
+  return (limit * value) / (limit + Math.abs(value));
+}
+
+/** Where a point sits relative to a corridor centreline. */
+interface CorridorProjection {
+  /** Shortest horizontal distance to the centreline, metres. */
+  readonly distanceM: number;
+  /** Elevation of the centreline at the closest point, metres. */
+  readonly lineY: number;
+}
+
+/**
+ * Projects a point onto a corridor's centreline.
+ *
+ * Iterates the polyline's segments rather than solving a point-to-curve problem, because a centreline is
+ * a polyline: the closest point is on some segment, and testing each is both exact for the geometry that
+ * exists and cheap enough for a function called on every terrain sample.
+ *
+ * Endpoints are handled by clamping the segment parameter to `[0, 1]`, so a corridor that runs off the
+ * edge of the map still behaves correctly near that edge rather than projecting onto an infinite line.
+ */
+function projectOntoCorridor(corridor: LevelCorridor, x: number, z: number): CorridorProjection {
+  const points = corridor.points;
+  let best = Infinity;
+  let bestY = points[0]?.y ?? 0;
+
+  for (let i = 0; i + 1 < points.length; i += 1) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lengthSquared = dx * dx + dz * dz;
+
+    // A zero-length segment (a duplicated waypoint) has no direction to project onto, so it is skipped
+    // rather than divided by. Authored maps can easily contain one, and a NaN here would silently poison
+    // every height on the map.
+    if (lengthSquared < 1e-9) {
+      continue;
+    }
+
+    // Parameter along the segment, clamped so the closest point stays on the polyline.
+    const t = clamp(((x - a.x) * dx + (z - a.z) * dz) / lengthSquared, 0, 1);
+    const px = a.x + dx * t;
+    const pz = a.z + dz * t;
+    const distanceM = Math.sqrt((x - px) * (x - px) + (z - pz) * (z - pz));
+
+    if (distanceM < best) {
+      best = distanceM;
+      bestY = a.y + (b.y - a.y) * t;
+    }
+  }
+
+  return { distanceM: best, lineY: bestY };
+}
+
+/**
+ * A stretch of ground held level along a line: a railway cutting, a levelled road, a parade ground.
+ *
+ * ## Why this exists
+ *
+ * A railway is a **graded** line. Real ones are cut and filled to hold a gentle gradient across country
+ * that is not level, and that is not a piece of trivia here - it is what makes a rail corridor readable
+ * and drivable on a map that is otherwise rolling. A line painted straight over undulating ground looks
+ * like a mistake, and undulating ground under rails looks like a ride.
+ *
+ * So the corridor is **part of the height field**, not decoration. Within `halfWidthM` the ground is
+ * pulled flat to the line''s own gradient, and across `blendM` it eases back into natural terrain. The
+ * result is a cutting visibly cut into a hill and a causeway visibly laid across a hollow, which is
+ * what a railway actually looks like - and it happens for free because the vehicles already follow
+ * this height field.
+ *
+ * The blend is a smoothstep with zero gradient at both ends, so nothing creases where the graded
+ * section meets natural ground. The same reasoning `coverHeight` uses, for the same reason.
+ */
+export interface LevelCorridor {
+  /** Stable id, used by tools and by the map validator. */
+  readonly id: string;
+  /** Centreline as world-space points, in order. Two or more. */
+  readonly points: readonly LevelCorridorPoint[];
+  /** Half-width held level, metres. Beyond this the ground is already easing back. */
+  readonly halfWidthM: number;
+  /** Distance over which the flattening blends back to natural ground, metres. */
+  readonly blendM: number;
+}
+
+/** One point on a corridor centreline. */
+export interface LevelCorridorPoint {
+  readonly x: number;
+  /** Elevation of the line here, metres. Interpolated along the segment. */
+  readonly y: number;
+  readonly z: number;
+}
 export interface TerrainConfig {
   /** Seed for the ridge phases and amplitudes. Same seed always produces the same terrain. */
   readonly seed: number;
@@ -127,6 +247,18 @@ export interface TerrainConfig {
    * must get that surface. Set in `DEFAULT_TERRAIN_CONFIG`; absent means flat.
    */
   readonly bowlDepthM?: number;
+
+  /**
+   * Stretches of ground held level along a line, added in the V6 correction pass.
+   *
+   * Optional and absent by default, so a caller configuring a specific surface still gets exactly that
+   * surface. The V6 rural battlefield uses one for its railway, because a railway is a *graded* line: real
+   * ones are cut and filled to hold a gentle gradient across country that is not level. Modelling that
+   * rather than painting rails over the bumps is what makes the corridor look like a cutting or an
+   * embankment instead of a mistake, and because it lives in the height field the vehicles follow it for
+   * free.
+   */
+  readonly levelCorridors?: readonly LevelCorridor[];
 }
 
 /**
@@ -202,6 +334,12 @@ export class Terrain {
   /** Depth of the central dish, metres. Zero when the caller configured a flat surface. */
   private readonly bowlDepthM: number;
 
+  /**
+   * Graded stretches of ground, resolved once. Empty by default, which keeps the cost off the hot path
+   * for every terrain that does not ask for one.
+   */
+  private readonly corridors: readonly LevelCorridor[];
+
   constructor(config: TerrainConfig = DEFAULT_TERRAIN_CONFIG) {
     this.config = config;
     this.ridgeA = makeRidge(config.seed, 0x9e3779b9, RIDGE_WAVELENGTHS_M[0]);
@@ -212,6 +350,14 @@ export class Terrain {
     // mean a ballistics test configured for flat ground could hit a mound it never knew existed.
     this.cover = config.cover ?? [];
     this.bowlDepthM = config.bowlDepthM ?? 0;
+    // Same reasoning for graded corridors. An empty list by default means a caller who configured a
+    // specific surface still gets exactly that surface.
+    this.corridors = config.levelCorridors ?? [];
+  }
+
+  /** The graded corridors this terrain holds level, for the renderer and for map tooling. */
+  get levelCorridors(): readonly LevelCorridor[] {
+    return this.corridors;
   }
 
   /** Surface height in metres at a world position. */
@@ -234,8 +380,86 @@ export class Terrain {
 
     h += this.bowlHeight(x, z);
     h += this.coverHeight(x, z);
+    // A *delta*, not a replacement height. `corridorHeight` returns 0 wherever no corridor reaches, which
+    // is the overwhelmingly common case, so this line is a no-op on a map without graded routes. Getting
+    // that wrong and returning the final height here doubles the ground everywhere and turns the whole
+    // battlefield into a hill — which is precisely what the test suite reported.
+    h += this.corridorOffset(x, z, h);
 
     return h;
+  }
+
+  /**
+ * The height a graded corridor *adds* to the natural ground, in metres.
+ *
+ * Zero wherever no corridor reaches, which is the common case and the one that matters most: this
+ * function is called on every terrain sample, so the overwhelming majority of them must cost one loop
+ * over an empty list and change nothing.
+ *
+ * ## Why the grading lives in the height field and not in a mesh
+ *
+ * A railway is a *graded* line. Real ones are cut and filled so the rails run at a gentle, near-constant
+ * gradient across country that is not level, and the visible result is a cutting through a rise or an
+ * embankment across a hollow. Painting rails straight over undulating ground looks like a mistake, and
+ * undulating ground under rails looks like a ride.
+ *
+ * Putting the grading in the height field rather than in a mesh means the vehicles follow it for free.
+ * There is no second surface for the physics mesh, the AI's path assessment, and the line-of-sight march
+ * to disagree about — and that disagreement is the exact bug class this codebase keeps testing for.
+ *
+ * ## Why the blend cannot make a cliff
+ *
+ * Two independent limits, because either alone is insufficient.
+ *
+ *  - The **cross-corridor falloff** is a smoothstep from the corridor's half-width out to
+ *    `halfWidthM + blendM`, so it reaches zero gradient at both ends and nothing creases where the
+ *    graded section meets natural ground. The same reasoning `coverHeight` uses.
+ *  - The **cut depth is soft-clamped**. A smoothstep alone still lets a corridor 15 m below the
+ *    surrounding ground build a 15 m bank across the blend distance, and if a map author ever writes such
+ *    a corridor the result is an impassable wall wearing a railway's appearance. Clamping the deviation
+ *    means a badly authored corridor degrades into a shallow, driveable swale rather than a cliff, which
+ *    is the failure mode that matters.
+ *
+ * Corridors are evaluated **after** the ridges, the edge rise and the cover features, so a graded line
+ * wins over the procedural noise it is supposed to sit on top of.
+ */
+  private corridorOffset(x: number, z: number, natural: number): number {
+    const corridors = this.corridors;
+    let offset = 0;
+    let bestWeight = 0;
+
+    for (let i = 0; i < corridors.length; i += 1) {
+      const corridor = corridors[i]!;
+      const projection = projectOntoCorridor(corridor, x, z);
+
+      // Beyond this the corridor has no influence at all, and skipping the remaining arithmetic is the
+      // common case on a map with several corridors: most ground samples touch at most one of them.
+      const outer = corridor.halfWidthM + corridor.blendM;
+      if (projection.distanceM >= outer) {
+        continue;
+      }
+
+      // 1 across the held width, easing to 0 at the outer edge.
+      const width =
+        projection.distanceM <= corridor.halfWidthM
+          ? 1
+          : 1 - (projection.distanceM - corridor.halfWidthM) / corridor.blendM;
+      const weight = width * width * (3 - 2 * width);
+
+      // Strongest corridor wins outright rather than accumulating. Two graded routes crossing — the town
+      // road over the railway — would otherwise compound into a crease at the junction, which is the one
+      // place on the map where a crease is most obviously wrong.
+      if (weight <= bestWeight) {
+        continue;
+      }
+      bestWeight = weight;
+
+      // How far the natural ground is from where the corridor wants it. Soft-clamped so no corridor,
+      // however badly authored, can cut a wall into the map.
+      offset = softClamp(projection.lineY - natural, CORRIDOR_MAX_DEVIATION_M) * weight;
+    }
+
+    return offset;
   }
 
   /**

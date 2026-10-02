@@ -109,7 +109,7 @@ export interface BatchOptions {
    * Which battlefield to fight on, added in V6.
    *
    * Optional rather than required so every V5F-era invocation keeps producing the same numbers: a
-   * harness that silently changed maps would make its own history incomparable. Pass `ashford-valley`
+   * harness that silently changed maps would make its own history incomparable. Pass `marlowe-crossing`
    * explicitly to exercise V6, or omit it to reproduce a V5 result exactly.
    */
   readonly map?: BattlefieldData;

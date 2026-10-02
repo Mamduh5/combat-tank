@@ -12,18 +12,21 @@ import { cameraOffsetFromTarget } from '../../src/client/camera/orbit-camera.js'
 import { Simulation } from '../../src/core/sim/world.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
-import { ASHFORD_VALLEY } from '../../src/core/world/maps/ashford-valley.js';
+import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
 
 const DEG = 180 / Math.PI;
 
 /** Flat, empty ground well inside the map, so terrain cannot confound a control measurement. */
 function groundFor(headingDeg: number): { x: number; y: number; z: number } {
   // Spread the test positions by heading so four tests do not all start from the same piece of ground.
+  // The base is negative so the whole spread stays inside the map: the heading multiplier is 1.2, so a
+  // 270-degree heading lands at z = 124 and a positive base would push it past the 250 m boundary — where
+  // `heightAt` still returns a number, the tank is outside the world, and every measurement is garbage.
   return { x: 0, y: 0, z: -200 + headingDeg * 1.2 };
 }
 
 function duelOnMap() {
-  return new Simulation({ vehicle: PLACEHOLDER_TANK, map: ASHFORD_VALLEY });
+  return new Simulation({ vehicle: PLACEHOLDER_TANK, map: MARLOWE_CROSSING });
 }
 
 /** Signed horizontal angle in degrees from one direction to another, about +Y. */

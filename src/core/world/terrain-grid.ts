@@ -18,8 +18,20 @@ import type { Terrain } from './terrain.js';
  * dependency, which is exactly what the core is for.
  */
 
-/** Grid resolution used for the shared terrain mesh. */
-export const TERRAIN_GRID_CELLS = 160;
+/**
+ * Grid resolution used for the shared terrain mesh.
+ *
+ * 200 cells, raised from 160 during the V6 railway work.
+ *
+ * The reason is not smoothness, it is *occlusion*. The mesh linearly interpolates between samples, so on
+ * concave ground the rendered surface sits slightly *above* the true analytic height — and anything drawn
+ * on that surface (a road, a rail bed, a building's base) is swallowed by it. At 160 cells across a 500 m
+ * map the error is a few centimetres, which is enough to hide a ribbon laid 10 cm up. 200 cells cuts the
+ * interpolation error by roughly a third and keeps flat ground flatter for free.
+ *
+ * The cost is 40 000 vertices rather than 25 000, which is nothing for a mesh this simple.
+ */
+export const TERRAIN_GRID_CELLS = 200;
 
 export interface TerrainGrid {
   /** Flat xyz vertex positions, row-major with `row -> z` and `col -> x`. */

@@ -150,4 +150,31 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
   },
+
+  // --- In-page scripts ------------------------------------------------------------------
+  // These are not Node scripts. They are read and evaluated by the screenshot harness *inside the
+  // running game* over the DevTools protocol, so they legitimately use `location` and `document`, and
+  // they reach into the live object graph through `globalThis.__combatTank` rather than importing it —
+  // inspecting the real scene is the entire point, and a reconstructed copy would prove nothing.
+  //
+  // Listing them explicitly rather than by pattern keeps the exception narrow: a new file under `tools/`
+  // is a Node script by default and has to be declared here to opt in.
+  {
+    files: [
+      'tools/tour.js',
+      'tools/probe.js',
+      'tools/inspect.js',
+      'tools/fire.js',
+      'tools/ai-duel.js',
+      'tools/contact-tour.js',
+      'tools/ground-check.js',
+    ],
+    languageOptions: {
+      ecmaVersion: 2022,
+      // Classic script, not a module: they are injected with `Runtime.evaluate`, so there is no import
+      // syntax and `globalThis` is how they reach the running game.
+      sourceType: 'script',
+      globals: { ...globals.browser },
+    },
+  },
 );

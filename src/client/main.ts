@@ -12,7 +12,7 @@ import { InputManager } from './input/input-manager.js';
 import { PhysicsWorld } from './physics/rapier-terrain.js';
 import { createScene } from './render/scene.js';
 import { buildBattlefieldProps } from './render/battlefield-props.js';
-import { ASHFORD_VALLEY } from '../core/world/maps/ashford-valley.js';
+import { MARLOWE_CROSSING } from '../core/world/maps/marlowe-crossing.js';
 import { CombatAudio } from './audio/combat-audio.js';
 import { ShellEffects } from './render/shell-effects.js';
 import { TankVisual } from './render/tank-visual.js';
@@ -72,9 +72,10 @@ async function bootstrap(): Promise<void> {
 
   // --- Simulation (headless core) ----------------------------------------------------
   const simulation = new Simulation({
-    // Ashford Valley, the V6 battlefield: hard cover, concealment, and hand-placed spawns. The V5 arena
-    // is still the default for any test that does not ask for a map, and stays reachable that way.
-    map: ASHFORD_VALLEY,
+    // Marlowe Crossing, the V6 battlefield: hard cover, concealment, graded routes, and hand-placed
+    // spawns. The V5 arena is still the default for any test that does not ask for a map, and stays
+    // reachable that way.
+    map: MARLOWE_CROSSING,
     vehicle: PLACEHOLDER_TANK,
     // A real opponent from V4: it drives, traverses, fires, and can be destroyed. Its input comes from
     // `EnemyController` inside the simulation, through the same `InputCommand` the player's keyboard

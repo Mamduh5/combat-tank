@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Battlefield } from '../../src/core/world/battlefield.js';
-import { ASHFORD_VALLEY } from '../../src/core/world/maps/ashford-valley.js';
+import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
 import { sampleConcealment, CONCEALMENT_FACTOR } from '../../src/core/world/concealment.js';
 import { evaluateDetection, SPOTTING_TUNING, type SpottingSubject } from '../../src/core/spotting/spotting.js';
 import { ContactTracker } from '../../src/core/spotting/contact-tracker.js';
@@ -15,7 +15,7 @@ import { vec3, type Vec3 } from '../../src/shared/vec3.js';
  * unpredictable rather than merely wrong.
  */
 
-const battlefield = new Battlefield(ASHFORD_VALLEY);
+const battlefield = new Battlefield(MARLOWE_CROSSING);
 
 /** A subject standing at a point on the map, at the turret ring height a real vehicle would present. */
 function subject(x: number, z: number, firedThisTick = false): SpottingSubject {
@@ -27,9 +27,21 @@ function subject(x: number, z: number, firedThisTick = false): SpottingSubject {
   };
 }
 
-/** Two vehicles looking at each other across a given separation on Ashford's own ground. */
+/**
+ * Where the detection-range tests measure from.
+ *
+ * Deliberately in the open southern fields rather than at the map's origin. The origin on Marlowe
+ * Crossing sits on the central swell, which exists precisely to break sight lines between hulls — so
+ * measuring detection from there measures the terrain, not the spotting rules, and the tests would fail for
+ * a reason that has nothing to do with what they are testing. This is 230 m of genuinely open field with no
+ * cover, hollow or rise between the two ends, so anything that changes the answer is the detection rule.
+ */
+const OPEN_FIELD_ORIGIN = { x: -120, z: 112 } as const;
+
+/** Two vehicles looking at each other across a given separation on Marlowe's own ground. */
 function facing(apartM: number, bFired = false) {
-  return evaluateDetection(battlefield, subject(0, 0), subject(0, apartM, bFired));
+  const from = subject(OPEN_FIELD_ORIGIN.x, OPEN_FIELD_ORIGIN.z);
+  return evaluateDetection(battlefield, from, subject(OPEN_FIELD_ORIGIN.x + apartM, OPEN_FIELD_ORIGIN.z, bFired));
 }
 
 describe('detection', () => {
@@ -44,16 +56,17 @@ describe('detection', () => {
     // is also the one that caught the observer-penalty bug: an unconditional multiplier had quietly
     // shortened *everyone*'s' range to 170 m, so the "visible" side of the boundary failed.
     const base = SPOTTING_TUNING.baseSightRangeM;
-    const from = subject(0, 0);
+    const from = subject(OPEN_FIELD_ORIGIN.x, OPEN_FIELD_ORIGIN.z);
+    const at = (apartM: number) => subject(OPEN_FIELD_ORIGIN.x + apartM, OPEN_FIELD_ORIGIN.z);
 
-    expect(evaluateDetection(battlefield, from, subject(0, base * 0.9)).detected).toBe(true);
-    expect(evaluateDetection(battlefield, from, subject(0, base * 1.1)).detected).toBe(false);
+    expect(evaluateDetection(battlefield, from, at(base * 0.9)).detected).toBe(true);
+    expect(evaluateDetection(battlefield, from, at(base * 1.1)).detected).toBe(false);
   });
 
   it('loses a vehicle behind a building even at close range', () => {
     // Distance must not be the only thing that matters. A tank 30 m away on the far side of a
     // warehouse is not visible, and if it were, cover would be decoration.
-    const barn = ASHFORD_VALLEY.structures.find((s) => s.id === 'red-barn')!;
+    const barn = MARLOWE_CROSSING.structures.find((s) => s.id === 'farm-barn')!;
     const result = evaluateDetection(
       battlefield,
       subject(barn.x - 30, barn.z),
@@ -67,9 +80,9 @@ describe('detection', () => {
   it('shortens detection in concealment, and the heavy kind hides more than the light kind', () => {
     // The relationship a player has to learn. "The wood hides me, the scrub does not" is only learnable
     // if the two are measurably different, so this asserts the ordering rather than exact numbers.
-    const zones = ASHFORD_VALLEY.concealment;
-    const wood = zones.find((z) => z.id === 'wood-core')!;
-    const scrub = zones.find((z) => z.id === 'scrub-b')!;
+    const zones = MARLOWE_CROSSING.concealment;
+    const wood = zones.find((z) => z.id === 'marlowe-wood')!;
+    const scrub = zones.find((z) => z.id === 'scrub-east')!;
 
     const inWood = sampleConcealment(zones, wood.x, wood.z);
     const inScrub = sampleConcealment(zones, scrub.x, scrub.z);
@@ -82,18 +95,18 @@ describe('detection', () => {
 
   it('cannot see into heavy concealment from far off, but can from close to', () => {
     // Concealment has to actually *do* something, not merely shave a number that was already generous.
-    const wood = ASHFORD_VALLEY.concealment.find((z) => z.id === 'wood-core')!;
+    const wood = MARLOWE_CROSSING.concealment.find((z) => z.id === 'marlowe-wood')!;
     const target = subject(wood.x, wood.z);
 
-    expect(evaluateDetection(battlefield, subject(wood.x + 150, wood.z), target).detected).toBe(false);
-    expect(evaluateDetection(battlefield, subject(wood.x + 25, wood.z), target).detected).toBe(true);
+    expect(evaluateDetection(battlefield, subject(wood.x - 150, wood.z), target).detected).toBe(false);
+    expect(evaluateDetection(battlefield, subject(wood.x - 25, wood.z), target).detected).toBe(true);
   });
 
   it('fades concealment smoothly to the edge of a zone rather than with a visible line', () => {
     // A hard-edged disc draws a line on the ground where concealment stops, and a player reads that
     // line as a bug. The smoothstep falloff is what stops the line existing.
-    const zones = ASHFORD_VALLEY.concealment;
-    const wood = zones.find((z) => z.id === 'wood-core')!;
+    const zones = MARLOWE_CROSSING.concealment;
+    const wood = zones.find((z) => z.id === 'marlowe-wood')!;
 
     const centre = sampleConcealment(zones, wood.x, wood.z).factor;
     const midway = sampleConcealment(zones, wood.x + wood.radiusM * 0.5, wood.z).factor;

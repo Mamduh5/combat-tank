@@ -686,7 +686,71 @@ This milestone is heavily about route choice, terrain readability and whether co
 screenshots; no human has driven Ashford Valley and asked whether it is fun to fight on. See the report for
 what specifically remains open.
 
+### The V6 correction: a rural railway battlefield
+
+**Milestone: a real map where cover and angles matter.** Implemented; awaiting owner playtest.
+
+**Goal:** positioning, cover, and the shape of the ground decide fights.
+
+**Why the first attempt was replaced.** It was a ridge, a cut, and a valley floor that was itself sloped, so
+ordinary driving felt like climbing. That is a problem of *proportion*, not of ambition: most of a map's
+surface should be comfortable, and the difficult parts should be named places a player chooses to go to.
+
+**The battlefield: Marlowe Crossing.** One authored map, stated as the four words a player should be able to
+say after thirty seconds — **town side / railway / fields / elevated side** — each of which is a route
+producing a different fight:
+
+- *The town route* through Marlowe village: short sight lines, hard cover, movement measured in metres.
+- *The railway route* along the graded line: the fastest crossing of the map and the most exposed thing on it.
+- *The field route* through open ground south of the line: where the tank finally accelerates and takes long shots.
+- *The elevated flank* at Cairn Height: sight lines paid for with a long exposed drive.
+
+**The railway is graded, not painted.** The mainline is a `LevelCorridor` in the **height field**, so the
+cutting and embankment are real geometry the vehicles follow. That is what makes the level crossing flat and
+crossable, and it means there is no rail collider to catch on — the brief's "a tank should not become stuck
+because a decorative rail is treated like a giant obstacle" is satisfied structurally, not by tuning.
+
+**Driveability is a measured constraint, not an intention.** `tools/measure-routes.mjs` walks every primary
+route, both spawns, the crossing and the approaches at a 2 m stride against the vehicle's own limits, and
+`tests/core/rural-railway-map.test.ts` asserts the same numbers so a regression fails the build. The current
+map: **every route ≤ 7.1°, every gateway ≤ 12°, and 98.3% of the playable surface at or under 14°.**
+
+**What the measurement caught that inspection did not** — three defects, none visible from a screenshot:
+
+1. **Overlapping bumps add.** `coverHeight` sums every feature, so four individually gentle bumps produced a
+   43.8° face. Every authored ratio looked reasonable; only measuring the surface showed the sum.
+2. **The edge rise is a ring, not a border.** Its smoothstep peaks near 0.81 of the half-size, so it passes
+   within 200 m of the centre and compounds with the hills *and* the base ridges.
+3. **`corridorOffset` returned a height where a delta was wanted.** Added on every sample it doubled the
+   ground everywhere and turned the map into a hill — while every corridor-specific test still passed. The
+   suite caught it across thirteen unrelated failures.
+
+**Environment art.** `src/client/render/battlefield-props.ts` generates everything from geometry primitives,
+driven by the same map data the simulation uses. **Provenance: none required — nothing is sourced.** The
+railway is built from the terrain's own corridor list: ballast, merged sleepers, two rails, the crossing deck
+with its gate arms, and a station platform with a parapet. Prototype quality by intent, and not final art.
+
+**Hard cover, LOS and spotting.** Unchanged from the accepted V6 design: one structure list read by the
+ballistics system, by line of sight and by the renderer, so a wall cannot exist in the picture and not in the
+simulation. `blocksSight: false` walls stop shells and not sight. Concealment is two strengths with a
+measured difference, smooth-faded to the zone edge, and every zone is drawn.
+
+**What the harness found.** `npm run sim -- --map marlowe-crossing` was run over `parked` and `mixed`. Every
+seed ends in the `engage` intent, every battle lands penetrating shells, and no seed is flagged. The map
+offers no route the opponent cannot reach, no building it drives into, and no crossing it fails to navigate.
+
+The earlier map's history is kept here because the lesson generalises: its first spawn layout put the tanks
+266 m apart on a map with a 200 m sight range, so neither could see the other and the opponent searched for
+five minutes without firing — and every screenshot looked fine. **A map defect of that kind is only ever
+caught by measurement**, which is why driveability is now a gate rather than a comment.
+
+**Not verified by a human.** This milestone is about route choice, terrain readability and whether the ground
+is pleasant to drive on, and **none of that has been played**. Everything above was verified by measurement,
+by the headless harness, and by screenshots from gameplay camera height. V6 is not final until the owner has
+played it.
+
 ## V7 — Tactical Team Skirmish
+
 
 **Milestone: a proper tactical tank game (solo + AI).**
 

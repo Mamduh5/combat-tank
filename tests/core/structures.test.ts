@@ -7,7 +7,7 @@ import {
   type Structure,
 } from '../../src/core/world/structures.js';
 import { Battlefield } from '../../src/core/world/battlefield.js';
-import { ASHFORD_VALLEY } from '../../src/core/world/maps/ashford-valley.js';
+import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
 import { vec3 } from '../../src/shared/vec3.js';
 
 /**
@@ -113,12 +113,14 @@ describe('hard cover', () => {
   it('sits on the ground the battlefield actually has, not a flat plane', () => {
     // A structure's height test is relative to the ground beneath it. Resolving that height at
     // construction rather than per ray is what keeps a wall on a hill from having a floating bottom.
-    const battlefield = new Battlefield(ASHFORD_VALLEY);
-    const bunker = battlefield.structures.find((s) => s.structure.id === 'kestrel-bunker');
+    // Asserted against a real building on real terrain, which is the case that matters: a graded rail
+    // corridor puts the station on ground a couple of metres above the field beside it.
+    const battlefield = new Battlefield(MARLOWE_CROSSING);
+    const station = battlefield.structures.find((s) => s.structure.id === 'station');
 
-    expect(bunker).toBeDefined();
-    const expected = battlefield.terrain.heightAt(bunker!.structure.x, bunker!.structure.z);
-    expect(bunker!.groundHeightM).toBeCloseTo(expected, 9);
+    expect(station).toBeDefined();
+    const expected = battlefield.terrain.heightAt(station!.structure.x, station!.structure.z);
+    expect(station!.groundHeightM).toBeCloseTo(expected, 9);
   });
 
   it('reports whether a point is inside a footprint', () => {
@@ -144,53 +146,65 @@ describe('hard cover', () => {
 });
 
 describe('the map says one thing and the simulation agrees', () => {
-  const battlefield = new Battlefield(ASHFORD_VALLEY);
+  const battlefield = new Battlefield(MARLOWE_CROSSING);
 
-  it('blocks a sight line through the outpost, and names the building that did it', () => {
+  it('blocks a sight line through the station, and names the building that did it', () => {
     // Placed deliberately: a building the map claims is hard cover must actually break a sight line
     // between two vehicles at ground level. This is the test that would fail if cover were renderer
     // decoration and the simulation still believed in open ground.
     //
-    // Asserted on a *flat* world carrying the real outpost building, rather than on Ashford Valley's
-    // own ground. On the real terrain the surrounding relief blocks the line first, and the test would
-    // pass for the wrong reason — reporting "blocked" while never consulting the structure at all,
+    // Asserted on a *flat* world carrying the real station building, rather than on the map's own
+    // ground. On the real terrain the surrounding relief can block the line first, and the test would
+    // then pass for the wrong reason — reporting "blocked" while never consulting the structure at all,
     // which is precisely the confusion this suite exists to prevent.
-    const outpost = ASHFORD_VALLEY.structures.find((s) => s.id === 'outpost-main')!;
-    const flat = flatBattlefield([outpost]);
+    const station = MARLOWE_CROSSING.structures.find((s) => s.id === 'station')!;
+    const flat = flatBattlefield([station]);
     const result = flat.hasLineOfSight(
-      vec3(outpost.x - 40, 2, outpost.z),
-      vec3(outpost.x + 40, 2, outpost.z),
+      vec3(station.x - 40, 2, station.z),
+      vec3(station.x + 40, 2, station.z),
     );
 
     expect(result.clear).toBe(false);
     expect(result.blockedBy).toBe('structure');
-    expect(result.blockerId).toBe('outpost-main');
+    expect(result.blockerId).toBe('station');
   });
 
-  it('leaves a clear sight line across the open middle of the valley', () => {
-    // The counterpart, and the reason the map leaves The Cut bare. A map where every line of sight is
-    // blocked is a map where nobody ever sees anyone, which is not a battlefield either.
-    const from = vec3(-40, battlefield.terrain.heightAt(-40, 0) + 1.42, 0);
-    const to = vec3(40, battlefield.terrain.heightAt(40, 0) + 1.42, 0);
+  it('leaves a clear sight line across the open fields', () => {
+    // The counterpart, and the reason the map leaves its southern half bare. A map where every line of
+    // sight is blocked is a map where nobody ever sees anyone, which is not a battlefield either.
+    const from = vec3(-60, battlefield.terrain.heightAt(-60, 60) + 1.42, 60);
+    const to = vec3(60, battlefield.terrain.heightAt(60, 60) + 1.42, 60);
     expect(battlefield.hasLineOfSight(from, to).clear).toBe(true);
   });
 
-  it('hides a vehicle in the cut from one standing on the valley floor', () => {
-    // Millbrook Cut is meant to be the low road. If a tank in it were visible from the floor, the route
-    // would not exist and the map's central idea would be decorative.
-    const inCut = vec3(4, battlefield.terrain.heightAt(4, 58) + 1.42, 58);
-    const onFloor = vec3(4, battlefield.terrain.heightAt(4, -10) + 1.42, -10);
-    expect(battlefield.hasLineOfSight(onFloor, inCut).clear).toBe(false);
+  it('hides a vehicle in the north hollow from one on the fields beside it', () => {
+    // The hollows exist so there is somewhere to be *below* the sight line of the ground around them.
+    // If a tank in one were visible from the field beside it, the feature would be decorative.
+    const inHollow = vec3(-92, battlefield.terrain.heightAt(-92, -162) + 1.42, -162);
+    const onField = vec3(-92, battlefield.terrain.heightAt(-92, -95) + 1.42, -95);
+    expect(battlefield.hasLineOfSight(onField, inHollow).clear).toBe(false);
   });
 
   it('cannot start with the two sides already in sight of each other', () => {
     // A design property, asserted so it cannot rot. An opening across open ground would hand the player
-    // a free shot and make the first thirty seconds a trade rather than a search.
+    // a free shot and make the first thirty seconds a trade rather than a search. The central swell is
+    // the object that guarantees it.
     const a = battlefield.playerSpawn;
     const b = battlefield.enemySpawn;
     const from = vec3(a.x, battlefield.terrain.heightAt(a.x, a.z) + 1.42, a.z);
     const to = vec3(b.x, battlefield.terrain.heightAt(b.x, b.z) + 1.42, b.z);
 
     expect(battlefield.hasLineOfSight(from, to).clear).toBe(false);
+  });
+
+  it('puts a low wall that shells stop at on the map, as well as one sight passes over', () => {
+    // The `blocksSight` distinction is only learnable if both kinds exist somewhere a player will meet
+    // them. Asserted against the real map rather than synthetic walls, so deleting one of the pairs is
+    // a test failure rather than a silent loss of a mechanic from the level design.
+    const sightBlocking = MARLOWE_CROSSING.structures.filter((s) => s.blocksSight && s.kind === 'barrier');
+    const seeOver = MARLOWE_CROSSING.structures.filter((s) => !s.blocksSight);
+
+    expect(sightBlocking.length).toBeGreaterThan(0);
+    expect(seeOver.length).toBeGreaterThan(0);
   });
 });
