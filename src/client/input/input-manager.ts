@@ -12,6 +12,11 @@ import type { Vec3 } from '../../shared/vec3.js';
  *   - W / S: forward and reverse throttle.
  *   - A / D: rotate the hull.
  *   - Mouse: look direction, which moves the camera only.
+ *   - C: return the camera directly behind the hull.
+ *
+ * The camera swings freely and is tracked *relative* to the hull, so mouse-look stays independent while
+ * the player always has a recoverable relationship between where the tank points and where they are
+ * looking. See camera/orbit-camera.ts for why that distinction was measured rather than assumed.
  *
  * The hull is never rotated toward where the camera is pointing. Camera and hull are genuinely
  * independent, which is the control model the genre asks for: where you look and where your tank
@@ -42,6 +47,8 @@ const TRACKED_CODES = new Set([
   'ArrowLeft',
   'ArrowRight',
   'Space',
+  // V6: returns the camera behind the tank. The escape hatch that makes a free orbit safe.
+  'KeyC',
 ]);
 
 export interface LookDelta {

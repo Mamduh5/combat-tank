@@ -3,6 +3,10 @@ import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+// `Vector3` is a type elsewhere in this file but a *value* in `measureContactOffset`, which calls
+// `TransformCoordinates`. Imported as a value so both uses resolve; a type-only import type-checks
+// everywhere else and then fails at exactly the one line that does real work.
+import { Vector3 as Vector3Ctor } from '@babylonjs/core/Maths/math.vector.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import type { Scene } from '@babylonjs/core/scene.js';
@@ -138,6 +142,16 @@ interface VariantSpec {
 }
 
 export class TankVisual {
+  /**
+   * How far the tank's own geometry sits above the root origin, in metres.
+   *
+   * Measured once from the track meshes after they are built, rather than held as a constant in the
+   * proportions table. The constant is what this replaces: it went stale the moment a proportion
+   * changed and nothing failed, the tank simply floated. Measuring it means the visual rests on its
+   * tracks whatever shape the vehicle is.
+   */
+  private contactOffsetM = 0;
+
   /** Root node. Position and rotation are set from simulation state each frame. */
   readonly root: TransformNode;
 
@@ -460,6 +474,10 @@ export class TankVisual {
     muzzle.position.z = barrelLengthM - brakeLengthM / 2;
     muzzle.material = makeMaterial(scene, 'tank-muzzle-mat', palette.barrel);
     muzzle.parent = this.barrelNode;
+
+    // Measure the ground-contact offset now that every track mesh exists, with the root still
+    // at the origin so the reading is in root-local space.
+    this.contactOffsetM = this.measureContactOffset();
   }
 
   /**
@@ -474,7 +492,19 @@ export class TankVisual {
    * and the barrel its own elevation. Nothing here derives one from another.
    */
   apply(state: VehicleState, turret: TurretVisualState): void {
-    this.root.position.set(state.position.x, state.position.y, state.position.z);
+    // Drop the visual by however far its own geometry sits above the root origin, so the tracks rest on
+    // the ground instead of hovering above it.
+    //
+    // Measured in the running game, this was an 0.86 m float. The simulation places the vehicle origin
+    // at ground + `groundClearanceM` (0.48 m), but the mesh is modelled around the hull rather than
+    // around the track contact, so the track bottoms sat a further 0.38 m above that. Nothing in the
+    // core was wrong — a vehicle origin a little above the ground is a sensible place for one — and the
+    // mismatch was purely in how the renderer read it.
+    this.root.position.set(
+      state.position.x,
+      state.position.y - this.contactOffsetM,
+      state.position.z,
+    );
 
     // Babylon is left-handed, so the heading is negated to turn the same way the simulation's
     // heading increases. Stated explicitly because getting it backwards is the classic
@@ -531,6 +561,33 @@ export class TankVisual {
       return TANK_COLORS.fender;
     }
     return this.accent ?? TANK_COLORS.hull;
+  }
+
+  /**
+   * Measures how far the built geometry sits above the root origin, by reading the track meshes.
+   *
+   * Called once at the end of construction, with the root still at the origin, so the bounding boxes are
+   * already in root-local space and the answer needs no matrix work of our own. Deliberate: the first
+   * attempt at this measurement, in the browser, hand-rolled a world-to-local transform and reported a
+   * clearance of -32 metres, which would have sent me to fix a model that was perfectly fine.
+   *
+   * Only the tracks are considered, because they are what meets the ground. A gun barrel dipping below
+   * the track line on a slope is a gun over a crest, not a vehicle in a hole.
+   */
+  private measureContactOffset(): number {
+    let lowest = Infinity;
+    for (const mesh of this.root.getChildMeshes()) {
+      if (!mesh.name.startsWith('tank-track')) {
+        continue;
+      }
+      const bounds = mesh.getBoundingInfo().boundingBox;
+      mesh.computeWorldMatrix(true);
+      const world = Vector3Ctor.TransformCoordinates(bounds.minimum, mesh.getWorldMatrix());
+      if (world.y < lowest) {
+        lowest = world.y;
+      }
+    }
+    return Number.isFinite(lowest) ? lowest : 0;
   }
 
   /** Enables shadow receiving on every part. */

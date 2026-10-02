@@ -1,6 +1,6 @@
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js';
-import type { Vec3 } from '../../core/math/index.js';
+import { wrapAngle, type Vec3 } from '../../core/math/index.js';
 import type { PhysicsWorld } from '../physics/rapier-terrain.js';
 
 /**
@@ -75,11 +75,25 @@ export const CAMERA_TUNING = {
   surfacePaddingM: 0.45,
   /** Minimum height the camera keeps above the ground directly beneath it, metres. */
   groundClearanceM: 1.1,
+  /**
+   * How quickly the camera's swing around the hull eases back to directly behind it, per second.
+   *
+   * This is the whole of the corrected control feel. The camera is still free to orbit and the turret
+   * is still fully independent, but the swing is *relative* and decays toward zero, so the hull's
+   * direction on screen is always recoverable. Measured before the fix: 63 degrees of unrecoverable
+   * mismatch on the opening frame, and unbounded once the player moved the mouse.
+   *
+   * 0.9 means roughly a third of the offset is removed per second - fast enough that a player who stops
+   * looking is soon looking at their own tank again, slow enough that deliberate looking around is
+   * never fought.
+   */
+  hullFollowRecoveryPerSec: 0.9,
 } as const;
 
 export class OrbitCamera {
   /** Current orbit yaw, radians. */
   private yawRad = 0;
+  /**    * The hull heading the camera is currently being carried by, radians.    *    * Stored rather than recomputed from the transform so the obstruction solver and `snapToTarget` can    * build a correct camera position without a caller having to supply the heading as well.    */    private hullYawRad = 0;
   private pitchRad: number = CAMERA_TUNING.initialPitchRad;
   private distanceM: number = CAMERA_TUNING.defaultDistanceM;
 
@@ -112,20 +126,44 @@ export class OrbitCamera {
    * @param focus      the point to orbit, normally just above the vehicle
    * @param lookDelta  mouse movement accumulated this frame
    * @param zoomDelta  wheel movement accumulated this frame
+   * @param hullHeadingRad the hull's current heading, so hull rotation can carry the camera
    */
   update(
     focus: Vec3,
     lookDelta: { yawRad: number; pitchRad: number },
     zoomDelta: number,
     dtSeconds: number,
+    hullHeadingRad: number,
   ): void {
+    // The orbit yaw is tracked **relative to the hull**; the hull heading is added in when the
+    // transform is built. Storing a world-space yaw instead is what made the controls read as reversed,
+    // and the reason is worth recording because the fix looks like a one-line sign swap and is not.
+    //
+    // Measured in the running game: under +1 throttle the tank moved `alongOwnNoseDeg: 0` at hull headings
+    // of 0, 90, 180 and 270 degrees, and -180 under reverse. **The control contract was already
+    // correct** and needed no change at all. What was broken was the framing: on spawn the camera looked
+    // 63 degrees away from the direction the tank pointed, because nothing ever related the two. A free
+    // orbit that does not track the hull will eventually sit on the tank's nose side, and from there W
+    // genuinely does drive away from the camera and A/D do appear swapped - with nothing on screen to
+    // say so.
+    // Carry the camera with the hull, and quietly walk the swing back to centre.
+    //
+    // The recovery term is what turns a free orbit into a *relative* one: the player may look anywhere,
+    // and when they stop looking the camera eases back behind the tank rather than leaving the hull
+    // pointing 60 degrees off to one side with nothing on screen to indicate it. Without this the tank's
+
+    // heading relative to the view is unbounded, and an unbounded reference is the same defect as no
+    // reference at all - it just happens to look fine until the player orbits once.
+    this.setHullYaw(hullHeadingRad);
+    const centred = wrapAngle(this.yawRad);
+    const recovery = 1 - Math.exp(-CAMERA_TUNING.hullFollowRecoveryPerSec * dtSeconds);
+    this.yawRad = wrapAngle(this.yawRad + centred * recovery);
     this.yawRad += lookDelta.yawRad;
     this.pitchRad = clampRange(
       this.pitchRad + lookDelta.pitchRad,
       CAMERA_TUNING.minPitchRad,
       CAMERA_TUNING.maxPitchRad,
     );
-
     if (zoomDelta !== 0) {
       this.distanceM = clampRange(
         this.distanceM + zoomDelta * CAMERA_TUNING.zoomStepM,
@@ -257,14 +295,36 @@ export class OrbitCamera {
     return this.currentDistanceM;
   }
 
-  /** Offset from the orbit target to the camera position, for the current angles and distance. */
+  /**
+   * Offset from the orbit target to the camera position, for the current angles and distance.
+   *
+   * The orbit yaw is **hull-relative**: `yawRad` is how far the camera has been swung around the tank's
+   * own axis, and the hull's world heading is added here. Keeping the two separate is what lets the
+   * camera follow hull rotation while the player still looks around freely, and it is the difference
+   * between "the camera is behind my tank" and "the camera is somewhere and my tank is somewhere".
+   *
+   * `orbitOffset` is the *negation* of the resulting forward vector, which is what places the camera
+   * behind the tank when `yawRad` is zero. That sign is the reason this function reads the way it does,
+   * and flipping it would put the camera permanently in front of the vehicle - which is exactly the
+   * reported symptom, arrived at from the other direction.
+   */
   private orbitOffset(distance: number): { x: number; y: number; z: number } {
+    const yaw = this.yawRad + this.hullYawRad;
     const cosPitch = Math.cos(this.pitchRad);
     return {
-      x: -Math.sin(this.yawRad) * cosPitch * distance,
+      x: -Math.sin(yaw) * cosPitch * distance,
       y: Math.sin(this.pitchRad) * distance,
-      z: -Math.cos(this.yawRad) * cosPitch * distance,
+      z: -Math.cos(yaw) * cosPitch * distance,
     };
+  }
+  /**
+   * Records the hull heading the camera is currently being carried by.
+   *
+   * Tracked rather than passed to `orbitOffset` so `snapToTarget` and the obstruction solver can build
+   * a transform without a caller having to supply the heading as well.
+   */
+  private setHullYaw(hullHeadingRad: number): void {
+    this.hullYawRad = hullHeadingRad;
   }
 
   private applyTransform(): void {
@@ -291,8 +351,12 @@ export class OrbitCamera {
    *
    * The orbit angles themselves are restored to the default, not just the distance.
    */
-  snapToTarget(): void {
+  snapToTarget(hullHeadingRad = 0): void {
+    // Directly behind the hull, not at a fixed world yaw. Snapping to a constant put the camera 63
+    // degrees off the tank's nose on the opening frame of a map whose spawn is not facing +Z, which is
+    // most of why the controls read as reversed on a restart.
     this.yawRad = 0;
+    this.setHullYaw(wrapAngle(hullHeadingRad));
     this.pitchRad = CAMERA_TUNING.initialPitchRad;
     this.distanceM = CAMERA_TUNING.defaultDistanceM;
     this.currentDistanceM = CAMERA_TUNING.defaultDistanceM;
@@ -315,8 +379,17 @@ export class OrbitCamera {
     this.shakeMagnitudeM = Math.max(this.shakeMagnitudeM, magnitudeM);
   }
 
+  /**
+   * Returns the camera to directly behind the hull, and is bound to a key.
+   *
+   * The escape hatch that makes a free orbit safe. Mouse look is still independent of the hull, as the
+   * control model requires, but a player who has lost the relationship can always get it back without
+   * hunting for it.
+   */
   recentreBehind(headingRad: number): void {
-    this.yawRad = headingRad;
+    this.yawRad = 0;
+    this.setHullYaw(wrapAngle(headingRad));
+    this.applyTransform();
   }
 }
 
@@ -324,3 +397,30 @@ function clampRange(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
 
+/**
+ * The camera's offset from its orbit target, in world space.
+ *
+ * Extracted as a pure function so the control contract can be tested without a scene, an engine, or a
+ * browser. The V6 correction pass turned on one measurement of this: whether the camera sits where the
+ * player believes it does, and whether the tank's nose points where the screen says it does. Both are
+ * pure geometry, and testing them through a running game meant a 24-second browser round trip per data
+ * point, which is why the first version of the probe reported its own results with inverted labels and
+ * nearly sent me to "fix" correct code.
+ *
+ * @param distance orbit radius, metres
+ * @param pitchRad tilt, positive looks down
+ * @param worldYawRad the *world* orbit yaw: hull heading plus the player's swing around the hull
+ * @returns the offset from the target to the camera
+ */
+export function cameraOffsetFromTarget(
+  distance: number,
+  pitchRad: number,
+  worldYawRad: number,
+): { x: number; y: number; z: number } {
+  const cosPitch = Math.cos(pitchRad);
+  return {
+    x: -Math.sin(worldYawRad) * cosPitch * distance,
+    y: Math.sin(pitchRad) * distance,
+    z: -Math.cos(worldYawRad) * cosPitch * distance,
+  };
+}

@@ -189,7 +189,7 @@ async function bootstrap(): Promise<void> {
     battle.restart();
     effects.clear();
     // Re-anchor the camera, which is otherwise left wherever the previous battle ended.
-    orbitCamera.snapToTarget();
+    orbitCamera.snapToTarget(simulation.vehicle.state.headingRad);
     lastPosition = simulation.vehicle.state.position;
     shotsFiredLastFrame = simulation.telemetry.shotsFired;
     lastBannerTick = -1;
@@ -270,6 +270,10 @@ async function bootstrap(): Promise<void> {
       input.consumeLookDelta(),
       input.consumeZoomDelta(),
       deltaSeconds,
+      // The hull heading, so the camera is carried by hull rotation. Without it the orbit is
+      // world-fixed and never relates to where the tank points, and W reads as reverse whenever
+      // the camera happens to end up on the tank nose side.
+      state.headingRad,
     );
 
     // 6. Presentation effects for the shells and impacts the simulation reported this frame.
@@ -483,6 +487,12 @@ async function bootstrap(): Promise<void> {
     }
     if (event.key === 'm' || event.key === 'M') {
       audio.setMuted(!audio.isMuted);
+    }
+    // C returns the camera behind the hull. The escape hatch for a player who has orbited the camera
+    // round to the front and can no longer tell which way their tank is pointing. Bound on the window
+    // for the same reason as restart: it has to work with the pointer locked or unlocked.
+    if (event.key === 'c' || event.key === 'C') {
+      orbitCamera.recentreBehind(simulation.vehicle.state.headingRad);
     }
   });
 
