@@ -348,12 +348,25 @@ describe('V6: the harness on a battlefield', () => {
     for (const battle of report.battles) {
       expect(battle.damageDealt).toBeGreaterThan(0);
     }
-  });
+    // Three five-minute simulated battles, back to back. The same explicit-budget reasoning as the test
+    // below: this is a wall-clock cost, and the assertion it protects is about the simulation's behaviour,
+    // not about how fast this particular machine happens to be.
+  }, 90_000);
 
   it('leaves the combat rules intact on the V6 map', () => {
     // The V6 brief is explicit that the V4/V5 combat experience must survive the terrain work. The
     // cheapest honest check is that a battle on the new map still produces penetrations: a map that
     // silently stopped letting shells through would satisfy every structural test and fail the game.
+    //
+    // **The explicit timeout is load-bearing, not incidental.** This is four full five-minute simulated
+    // battles, run back to back, and it needs roughly 31 s of real time on this machine against the config's
+    // 30 s default. It was passing only just before this correction pass, and only because the previous
+    // spawn pair never produced a fast kill — the opponent could not even find the player. Now that contact
+    // opens at spawn the fights resolve sooner but run *more* shell exchanges while they last, which pushed
+    // it over the line.
+    //
+    // A timeout here is a measurement artefact, not a combat regression: the assertion that matters is
+    // `penetrations > 0` below, and that is evaluated the same way whether the test takes 20 s or 40.
     const report = runBatch({
       battles: 4,
       // Five minutes, for the same measured reason as the test above.
@@ -362,5 +375,5 @@ describe('V6: the harness on a battlefield', () => {
       map: MARLOWE_CROSSING,
     });
     expect(report.totals.penetrations).toBeGreaterThan(0);
-  });
+  }, 90_000);
 });

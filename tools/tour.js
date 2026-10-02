@@ -63,6 +63,20 @@
       x: 12, y: 9, z: -6, look: { x: 46, y: 3, z: -34 },
       note: 'The level crossing from the road. Deck, gates, and the road running over the rails.',
     },
+    railwayEye: {
+      // Deliberately low: about 3 m, i.e. roughly turret height on a tank. This is the view the owner
+      // actually plays from, and the one that decided the railway was unfindable. The aerial views passed
+      // while it was invisible, because from 250 m up the whole map is a diagram and every line on it is
+      // equally legible. Judged from here, the railway has to carry itself.
+      x: -190, y: 3.2, z: -22, look: { x: 40, y: 3.2, z: -20 },
+      note: 'Eye level along the line. The decisive test: is that a railway?',
+    },
+    railwayApproach: {
+      // Approaching the line across open country, at normal third-person height. The case the owner was in:
+      // driving somewhere and failing to notice the railway until nearly on it.
+      x: -150, y: 8, z: 30, look: { x: -40, y: 2, z: -34 },
+      note: 'Driving at the line across the fields. Do the poles announce it from a distance?',
+    },
     station: {
       x: 78, y: 12, z: -66, look: { x: 46, y: 5, z: -36 },
       note: 'The station and its platform. Does the railway read as a place?',
@@ -97,9 +111,25 @@
       note: "The player's opening view. Does it frame the tank and say which way the map goes?",
     },
     enemyspawn: {
-      x: 65, y: 12, z: -105, look: { x: 60, y: 2, z: -50 },
-      park: { x: 65, z: -55, heading: -0.85, enemy: true },
-      note: "The opponent's opening position. Open ground with routes available, or a trap?",
+      // Moved with the opponent spawn in this correction pass, from (65, -55) heading -0.85. The old pair
+      // put the opponent 233 m away with no line of sight from anywhere on a direct approach, which is the
+      // state the owner reported as "could not find the enemy".
+      x: 12, y: 12, z: -52, look: { x: -30, y: 2, z: -10 },
+      park: { x: -30, z: -10, heading: -0.813, enemy: true },
+      note: "The opponent's opening position. In contact at 131 m, with the railway behind it.",
+    },
+    opening: {
+      // The player's actual opening frame: spawn pose, opening heading, the normal orbit camera behind it.
+      // This is the view that decides whether the first thing a player sees explains the match.
+      x: -142, y: 12, z: 92, look: { x: -110, y: 2, z: 62 },
+      park: { x: -125, z: 80, heading: 2.2 },
+      note: 'The opening frame. Can the player see the opponent, the railway and the crossing at once?',
+    },
+    contact: {
+      // Along the sight line from the player's spawn to the opponent's, at gameplay camera height.
+      x: -92, y: 9, z: 52, look: { x: -14, y: 2, z: -6 },
+      park: { x: -125, z: 80, heading: 2.2 },
+      note: 'Down the opening sight line. Is the opponent visible on approach, at a sensible range?',
     },
 
     // --- The tank in the scenery ---

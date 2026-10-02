@@ -168,6 +168,9 @@ export default tseslint.config(
       'tools/ai-duel.js',
       'tools/contact-tour.js',
       'tools/ground-check.js',
+      // Driven by `tools/control-check.mjs`. Same contract: evaluated inside the running game, so it needs
+      // the browser globals and reaches the live object graph through `globalThis.__combatTank`.
+      'tools/control-probe.js',
     ],
     languageOptions: {
       ecmaVersion: 2022,

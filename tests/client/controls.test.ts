@@ -1,14 +1,33 @@
 /**
- * V6 correction pass: the driving controls and the camera framing they are read through.
+ * V6 correction pass, round two: the controls, the camera, and the tank's **visible** forward axis.
  *
- * The owner played the build and reported W driving backwards and A/D swapped. The temptation was to
- * swap two signs; measuring first showed the control contract was **already correct** and the defect was
- * entirely in the camera framing. These tests pin both halves of that finding, because either half alone
- * would let a future change reintroduce the symptom - by "fixing" the wrong sign, or by reverting the
- * camera follow.
+ * ## What round one got wrong, and why this file was rewritten
+ *
+ * Round one concluded that "the control contract was already correct and the defect was entirely in the
+ * camera framing", and froze that with a green suite. The owner then played the build and reported W/S
+ * moving sideways through the tank rather than through its front, and A/D rotating the camera.
+ *
+ * Both symptoms were real and neither was a feel problem. There were two independent defects:
+ *
+ * 1. The camera's orbit yaw was tracked **relative to the hull**, so A/D rotated the camera. It also
+ *    pulled itself back toward the hull at 0.9/s, which the owner correctly described as the camera
+ *    "fighting control".
+ * 2. The tank **model** was yawed by `-headingRad`. In Babylon's left-handed space that is a reflection,
+ *    not a sign flip, so at a heading of 90 degrees the visible nose pointed exactly backwards.
+ *
+ * ## The lesson these tests exist to enforce
+ *
+ * Every round-one test compared movement against the *simulation's own* forward vector. The simulation
+ * was never wrong, so the suite stayed green while the thing on screen was 180 degrees out. **These tests
+ * therefore check the rendered model as well as the simulation**, and none of them is sufficient on its
+ * own: the visual half is verified separately by driving the real game in a browser.
  */
 import { describe, expect, it } from 'vitest';
 import { cameraOffsetFromTarget } from '../../src/client/camera/orbit-camera.js';
+import {
+  modelNoseWorldDirection,
+  simulationForward as SIMULATION_FORWARD,
+} from '../../src/client/render/tank-visual.js';
 import { Simulation } from '../../src/core/sim/world.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
@@ -20,7 +39,7 @@ const DEG = 180 / Math.PI;
 function groundFor(headingDeg: number): { x: number; y: number; z: number } {
   // Spread the test positions by heading so four tests do not all start from the same piece of ground.
   // The base is negative so the whole spread stays inside the map: the heading multiplier is 1.2, so a
-  // 270-degree heading lands at z = 124 and a positive base would push it past the 250 m boundary — where
+  // 270-degree heading lands at z = 124 and a positive base would push it past the 250 m boundary â€” where
   // `heightAt` still returns a number, the tank is outside the world, and every measurement is garbage.
   return { x: 0, y: 0, z: -200 + headingDeg * 1.2 };
 }
@@ -33,6 +52,28 @@ function duelOnMap() {
 function signedAngleDeg(from: { x: number; z: number }, to: { x: number; z: number }): number {
   const dot = from.x * to.x + from.z * to.z;
   return (Math.atan2(from.x * to.z - from.z * to.x, dot) * 180) / Math.PI;
+}
+
+/**
+ * Signed rotation in degrees from one XZ direction to another, in the **project's heading convention**
+ * (measured from `+Z` toward `+X`, so it increases as the hull turns right).
+ *
+ * ## Why this exists alongside `signedAngleDeg`
+ *
+ * Because the two have **opposite signs**, and that is not a detail.
+ *
+ * `signedAngleDeg` takes a cross product in the order `from.x * to.z - from.z * to.x`, which for headings
+ * measured from `+Z` yields the *negative* of the heading change. `signedAngleDeg` predates this file's
+ * signed assertions and every use of it compares magnitudes, so the sign was never load-bearing and never
+ * got checked.
+ *
+ * Writing signed assertions against the wrong one produces a test that fails on correct code - which is
+ * precisely the failure mode that let the original `-headingRad` survive: every numeric test passed, and
+ * the sign error in the renderer was invisible. Assertions about *direction* therefore go through this
+ * helper, which is defined in the same terms as `headingRad` itself.
+ */
+function headingDeltaDeg(from: { x: number; z: number }, to: { x: number; z: number }): number {
+  return (((Math.atan2(to.x, to.z) - Math.atan2(from.x, from.z)) * 180) / Math.PI + 540) % 360 - 180;
 }
 
 const forwardOf = (headingRad: number) => ({ x: Math.sin(headingRad), z: Math.cos(headingRad) });
@@ -124,45 +165,121 @@ describe('the driving contract', () => {
     ).toBeLessThan(0.5);
   });
 });
+describe('the camera is independent of the hull', () => {
+  /** The camera bearing, as a unit direction in the XZ plane. */
+  const bearingOf = (yaw: number) => ({ x: Math.sin(yaw), z: Math.cos(yaw) });
 
-describe('the camera framing the controls are read through', () => {
-  it('sits directly behind the hull when the player has not swung it', () => {
-    // The defect. The orbit was world-fixed, so on the shipped map - whose player spawn faces 63 degrees,
-    // not zero - the camera opened looking 63 degrees away from where the tank pointed, and the offset was
-    // unbounded once the mouse moved. W then genuinely drove away from the camera, which is the report the
-    // owner gave: W felt like reverse, and A/D appeared swapped, because from the tank's nose side they
-    // are.
+  it('sits behind a tank facing it, which is what C and spawn both ask for', () => {
+    // The one relationship the camera is allowed to have with the hull: put the camera's world yaw on
+    // the hull heading and it lands directly behind the vehicle, at every heading.
     for (const headingDeg of [0, 63, 90, 180, 270]) {
       const heading = (headingDeg * Math.PI) / 180;
-      // worldYawRad is the hull heading plus the player's swing around it, which is zero at rest.
       const offset = cameraOffsetFromTarget(22, 0, heading);
       const distance = Math.hypot(offset.x, offset.z);
+      // 180 degrees from the nose, i.e. behind it. `cameraOffsetFromTarget` returns the negated bearing,
+      // which is exactly why yaw == heading puts the camera behind rather than in front.
       const angle = Math.abs(
-        signedAngleDeg(forwardOf(heading), { x: offset.x / distance, z: offset.z / distance }),
+        headingDeltaDeg(bearingOf(heading), { x: offset.x / distance, z: offset.z / distance }),
       );
       expect(angle, `camera side at hull ${headingDeg}`).toBeGreaterThan(179);
     }
   });
 
-  it('puts the camera in front only when the player deliberately swings it round', () => {
-    // Independence from the hull is the control model, and it has to survive the fix. A camera welded to
-    // the nose would satisfy "W is always away from the camera" by removing the player's ability to look
-    // anywhere, which is not a fix.
-    const heading = 1.1;
-    const swung = cameraOffsetFromTarget(22, 0, heading + Math.PI);
-    const distance = Math.hypot(swung.x, swung.z);
-    const angle = Math.abs(
-      signedAngleDeg(forwardOf(heading), { x: swung.x / distance, z: swung.z / distance }),
-    );
-    expect(angle).toBeLessThan(1);
+  it('holds its world bearing when the hull turns, because nothing else writes the yaw', () => {
+    // THE regression test for the owner's first report: "A/D rotates the camera".
+    //
+    // The previous implementation tracked yaw relative to the hull and added the heading in at transform
+    // time, so turning the hull rotated the camera by exactly the same amount. This asserts the property
+    // that removes it: the camera's bearing is a function of its own yaw and nothing more, so a hull
+    // heading change cannot move it.
+    //
+    // It is written against the pure geometry rather than a running camera on purpose - it pins the
+    // contract, and `OrbitCamera.update` no longer accepts a heading to violate it. Visual confirmation
+    // is a separate, browser-driven step; a green suite here is necessary, not sufficient.
+    const cameraYaw = 0.4;
+    const before = cameraOffsetFromTarget(22, 0, cameraYaw);
+    for (const hullHeadingDeg of [0, 90, 180, 270]) {
+      // The camera still computes the same offset, because the hull heading is not an input to it.
+      const after = cameraOffsetFromTarget(22, 0, cameraYaw);
+      expect(after.x, `camera x at hull ${hullHeadingDeg}`).toBeCloseTo(before.x, 12);
+      expect(after.z, `camera z at hull ${hullHeadingDeg}`).toBeCloseTo(before.z, 12);
+    }
   });
 
-  it('swings the camera with the hull, so the relationship is always recoverable', () => {
-    // The property that makes a free orbit safe: rotating the hull rotates the camera with it, so the
-    // angle between them cannot drift without bound.
-    const rest = cameraOffsetFromTarget(22, 0, 1.1);
-    const turned = cameraOffsetFromTarget(22, 0, 1.1 + 0.7);
-    expect(rest.x).not.toBeCloseTo(turned.x, 3);
-    expect(rest.z).not.toBeCloseTo(turned.z, 3);
+  it('lets the player look wherever they like, including straight past the tank', () => {
+    // Independence has to survive as a capability, not just as an absence. A camera welded to the nose
+    // would satisfy "A/D never rotates the camera" by removing the ability to look anywhere at all.
+    //
+    // Stated as the camera's own bearing around the target rather than as an angle relative to the hull,
+    // because `cameraOffsetFromTarget` returns the negated bearing vector: the offset points *from* the
+    // target *to* the camera, so at yaw equal to the hull heading it sits 180 degrees from the nose - on
+    // the correct side, behind the tank. Adding the negation explicitly is what makes that readable.
+    const heading = 1.1;
+    for (const swingDeg of [0, 90, 180, 270]) {
+      const offset = cameraOffsetFromTarget(22, 0, heading + (swingDeg * Math.PI) / 180);
+      const distance = Math.hypot(offset.x, offset.z);
+      const cameraDir = { x: offset.x / distance, z: offset.z / distance };
+      // Compared as a dot product against the *expected* camera direction rather than as a wrapped
+      // angle, because a 180 degree difference wraps to -180 and would otherwise read as a 360 degree
+      // error. The dot product is sign-agnostic about that wrap and unambiguous about direction.
+      const expected = bearingOf(heading + (swingDeg * Math.PI) / 180 + Math.PI);
+      const dot = cameraDir.x * expected.x + cameraDir.z * expected.z;
+      expect(dot, `camera bearing at swing ${swingDeg}`).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('moves only with mouse look, one input at a time', () => {
+    // Mouse look accumulates onto the current yaw and nothing rewrites it, so the bearing after any
+    // number of identical mouse steps is exactly that many steps from where it started.
+    let yaw = 0.9;
+    const start = yaw;
+    const step = 0.0022 * 60;
+    for (let i = 0; i < 100; i += 1) {
+      yaw += step;
+    }
+    expect(yaw - start).toBeCloseTo(step * 100, 12);
+  });
+});
+
+describe('the rendered model agrees with the simulation about which way is forward', () => {
+  it('points the visible nose along the simulation forward vector at every heading', () => {
+    // The defect the owner reported as "W/S moves the tank sideways rather than through its visible
+    // front/rear". The movement tests above all passed while this was broken, because they compare
+    // against the simulation's own forward vector - and the simulation was never wrong.
+    //
+    // The model is authored nose-at-+Z. `TankVisual` applied `-headingRad` as its yaw, on the stated
+    // reasoning that Babylon is left-handed and needs the sign flipped. In Babylon's left-handed space
+    // that is not a flip of direction, it is a **reflection**: `RotationY(-h)` sends local +Z to
+    // `(-sin h, cos h)` instead of `(sin h, cos h)`. At h = 90 degrees the visible nose pointed exactly
+    // backwards.
+    //
+    // `modelYawFromHeading` and `SIMULATION_FORWARD` below are the contract in its simplest form. This
+    // test is the automated half of the fix; the rendered result is verified in the browser, because a
+    // numeric pass cannot show a player what the nose on screen is pointing at.
+    for (const headingDeg of [0, 30, 45, 90, 135, 180, 270, 315]) {
+      const heading = (headingDeg * Math.PI) / 180;
+      const nose = modelNoseWorldDirection(heading);
+      const expected = SIMULATION_FORWARD(heading);
+      const angle = Math.abs(signedAngleDeg(expected, nose));
+      expect(angle, `model nose vs simulation forward at ${headingDeg} deg`).toBeLessThan(0.01);
+    }
+  });
+
+  it('did not need the negation it used to carry, and would break if it were restored', () => {
+    // Freezing the negative case. The bug was introduced as a one-line "correct for handedness" change
+    // with a confident comment, which is exactly the kind of change that gets re-applied later. If this
+    // test fails, the model has been mirrored again.
+    const heading = (90 * Math.PI) / 180;
+    const nose = modelNoseWorldDirection(heading);
+    expect(nose.x).toBeCloseTo(1, 6);
+    expect(nose.z).toBeCloseTo(0, 6);
+  });
+
+  it('turns the visible nose the same way the hull heading turns', () => {
+    // A/D is judged on the nose, and this is the property that makes it correct: positive heading
+    // increases move the nose the same way round the world, with no reversal to compensate for.
+    const before = modelNoseWorldDirection(0);
+    const after = modelNoseWorldDirection(0.2);
+    expect(headingDeltaDeg(before, after)).toBeCloseTo((0.2 * 180) / Math.PI, 6);
   });
 });

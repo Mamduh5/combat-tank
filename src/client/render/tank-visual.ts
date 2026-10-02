@@ -7,6 +7,7 @@ import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 // `TransformCoordinates`. Imported as a value so both uses resolve; a type-only import type-checks
 // everywhere else and then fails at exactly the one line that does real work.
 import { Vector3 as Vector3Ctor } from '@babylonjs/core/Maths/math.vector.js';
+import { Matrix } from '@babylonjs/core/Maths/math.vector.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import type { Scene } from '@babylonjs/core/scene.js';
@@ -30,13 +31,13 @@ const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
 /**
  * The V4 prototype tank model: a low/mid-poly vehicle assembled procedurally.
  *
- * ## Asset provenance — created in-project, no external files
+ * ## Asset provenance â€” created in-project, no external files
  *
  * Every mesh here is generated in code from the vehicle definition's own dimensions. Nothing is
  * imported, downloaded, or licensed. That was a deliberate choice for the first real-asset version:
  * sourcing a model would have introduced redistribution questions and a licence to track, and the
  * point of this version is to establish *that* the game looks like it contains tanks. When production
- * art replaces this, it will be loaded by `visualId` and nothing in the simulation changes — that is
+ * art replaces this, it will be loaded by `visualId` and nothing in the simulation changes â€” that is
  * the property ADR-0003 promised, and this file is where it gets exercised.
  *
  * ## What makes it read as a tank
@@ -48,7 +49,7 @@ const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
  *  - **A sloped upper glacis and a vertical lower plate**, so the hull front has a *shape* rather than
  *    being a flat face. This is the single strongest silhouette cue for "this is the front".
  *  - **A tapered, faceted turret with a cast mantlet**, giving the turret a distinct top outline
- *    instead of a cube, plus a rear bustle that overhangs — which is what makes a turret look like a
+ *    instead of a cube, plus a rear bustle that overhangs â€” which is what makes a turret look like a
  *    turret rather than a lid.
  *  - **Track links**, visible as a repeated pattern along each track's outer face, so the running gear
  *    reads as *tracked* rather than as a dark skirt. Wheels alone were not enough at range.
@@ -61,14 +62,14 @@ const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
  *
  * The opponent uses a different **silhouette**, not just a different colour: a longer, lower hull and a
  * rounded, cast-looking turret against the player's slab-sided turret and shorter hull. Colour alone
- * was the V3R approach and it is not enough — at range, in fog, or for a colour-blind player, two tanks
+ * was the V3R approach and it is not enough â€” at range, in fog, or for a colour-blind player, two tanks
  * of different colours in the same shape are genuinely hard to tell apart. A shape difference is
  * legible at any distance and in any lighting.
  *
  * ## Hierarchy
  *
- * The turret and barrel are **separate transform nodes**, mirroring the simulation's structure — hull,
- * then turret, then barrel — so rotating the hull carries the turret automatically and the two can
+ * The turret and barrel are **separate transform nodes**, mirroring the simulation's structure â€” hull,
+ * then turret, then barrel â€” so rotating the hull carries the turret automatically and the two can
  * never disagree about which way the gun is pointing.
  */
 
@@ -498,7 +499,7 @@ export class TankVisual {
     // Measured in the running game, this was an 0.86 m float. The simulation places the vehicle origin
     // at ground + `groundClearanceM` (0.48 m), but the mesh is modelled around the hull rather than
     // around the track contact, so the track bottoms sat a further 0.38 m above that. Nothing in the
-    // core was wrong — a vehicle origin a little above the ground is a sensible place for one — and the
+    // core was wrong â€” a vehicle origin a little above the ground is a sensible place for one â€” and the
     // mismatch was purely in how the renderer read it.
     this.root.position.set(
       state.position.x,
@@ -506,15 +507,40 @@ export class TankVisual {
       state.position.z,
     );
 
-    // Babylon is left-handed, so the heading is negated to turn the same way the simulation's
-    // heading increases. Stated explicitly because getting it backwards is the classic
-    // "steering is inverted" bug.
-    this.root.rotation.set(state.bodyPitchRad, -state.headingRad, state.bodyRollRad);
+    // ## Why the heading is applied **positively**
+    //
+    // This was `-state.headingRad`, on the reasoning that Babylon is left-handed and therefore needs
+    // the sign flipped. That reasoning is wrong, and the comment recorded it as settled fact, which is
+    // exactly what let it survive: every automated test compared movement against the *simulation's own*
+    // forward vector, and the simulation was never wrong. Only the rendered tank was.
+    //
+    // The model is authored with its nose at local **+Z** (glacis front face, idler, and muzzle all sit
+    // at +Z). The simulation's forward vector is `(sin h, cos h)`. Checked against Babylon's own
+    // `Matrix.RotationY`, `RotationY(+h)` maps local +Z to exactly `(sin h, cos h)`, while
+    // `RotationY(-h)` maps it to `(-sin h, cos h)` - the nose reflected across the X axis rather than
+    // rotated.
+    //
+    // The consequence was not a subtle misalignment. At h = 90 degrees the visible nose pointed **exactly
+    // backwards**, 180 degrees out, and the error grew linearly with heading in between. So the tank
+    // appeared to move sideways instead of through its own front, and A/D appeared to swing the nose the
+    // wrong way. Both of the owner's control reports, and both invisible to vector-only tests, which is
+    // why this pass verifies the rendered model rather than the vector again.
+    //
+    // Positive heading makes the model's local axes coincide with the simulation's own basis: local +Z
+    // becomes forward, and local +X becomes `(cos h, -sin h)`, the simulation's right axis. That is also
+    // why the pitch and roll need no sign change - they were computed in that basis all along and were
+    // only ever being displayed in a mirrored frame.
+    this.root.rotation.set(
+      state.bodyPitchRad,
+      hullVisualYawRad(state.headingRad),
+      state.bodyRollRad,
+    );
 
-    // The turret's *local* angle, negated for the same handedness reason. Because it is a child of
-    // the hull, the hull's rotation is inherited automatically — rotating the hull carries the
-    // turret with it, which is what a real turret ring does.
-    this.turretNode.rotation.y = -turret.localAngleRad;
+    // The turret's *local* angle, positively, for the same reason it was previously negated. Because it
+    // is a child of the hull, the hull's rotation is inherited automatically, so rotating the hull
+    // carries the turret with it - which is what a real turret ring does. The gun's world bearing then
+    // works out as `hull heading + local angle`, matching `gunDirection` in the core exactly.
+    this.turretNode.rotation.y = turret.localAngleRad;
 
     // Elevation is a pitch about the barrel's own pivot. The barrel node already carries the
     // cylinder's lay-flat rotation on the mesh, so only the elevation is applied here.
@@ -524,7 +550,7 @@ export class TankVisual {
   /**
    * Tints the vehicle to show it has been destroyed.
    *
-   * Deliberately crude — a dark, cold body. The owner asked for the state to be *visibly
+   * Deliberately crude â€” a dark, cold body. The owner asked for the state to be *visibly
    * distinguishable* and explicitly not for destruction effects, so this is a colour swap rather than
    * smoke, fire, or a wreck model.
    *
@@ -609,6 +635,71 @@ export class TankVisual {
 
 /** Re-exported so callers can reach the tuning without a second import. */
 export { TANK_PROPORTIONS };
+
+/**
+ * The model's nose direction as a unit vector in **model-local space**.
+ *
+ * Local `+Z`, because that is where the visible front of the tank is: the glacis front face, the idler
+ * wheel, and the muzzle all sit at `+Z`. This constant exists so the orientation contract below is stated
+ * in one place instead of being re-derived (and re-mis-derived) by each consumer.
+ */
+const MODEL_NOSE_LOCAL = new Vector3Ctor(0, 0, 1);
+
+/**
+ * The yaw the **renderer** applies to the hull, from the simulation's heading.
+ *
+ * ## This one function is the whole orientation contract
+ *
+ * Both `TankVisual.apply` and `modelNoseWorldDirection` read it, so the thing that is drawn and the thing
+ * that is measured cannot drift apart. That matters because this is exactly how the bug happened: the
+ * renderer negated the heading, the tests compared against the simulation, and nothing ever asked the
+ * renderer what it was doing.
+ *
+ * It is the identity, and that is the point. The model is authored nose-at-`+Z` and Babylon's
+ * left-handed `Matrix.RotationY(h)` maps local `+Z` to `(sin h, cos h)` — which is already the simulation's
+ * forward vector. No sign correction is required, and the previous `-headingRad` was not a correction but
+ * a reflection.
+ *
+ * If this ever needs a non-identity value, the model is what should move, not the locomotion: the
+ * simulation's forward vector is what the vehicle actually drives along, and the brief is explicit that
+ * locomotion must not be bent to match a rendering.
+ */
+export function hullVisualYawRad(headingRad: number): number {
+  return headingRad;
+}
+
+/**
+ * Where the **rendered** tank's nose points, for a hull heading.
+ *
+ * ## Why this function exists at all
+ *
+ * Because a vector-only test cannot catch that class of bug, and this one shipped through a fully green
+ * suite. Every existing control test compared movement against the *simulation's* forward vector, which
+ * was always correct; nothing compared that against what the player could see. At a heading of 90 degrees
+ * the visible nose pointed exactly backwards, so W drove the tank out of its own tail and A/D swung the
+ * nose the wrong way — and every numeric assertion still passed.
+ *
+ * Computed with Babylon's own matrix rather than by restating `sin`/`cos`, so this measures the actual
+ * engine convention instead of re-asserting the algebra that produced the mistake.
+ *
+ * @param headingRad the simulation's hull heading
+ * @returns a unit direction in world space
+ */
+export function modelNoseWorldDirection(headingRad: number): { x: number; y: number; z: number } {
+  const nose = Vector3Ctor.TransformNormal(MODEL_NOSE_LOCAL, Matrix.RotationY(hullVisualYawRad(headingRad)));
+  return { x: nose.x, y: nose.y, z: nose.z };
+}
+
+/**
+ * The simulation's forward vector for a hull heading, as a unit direction.
+ *
+ * Restated from `tank.ts`'s integration step rather than imported from it, on purpose: the point of the
+ * comparison is that these two *independent* expressions agree. A shared helper would make the test
+ * tautological.
+ */
+export function simulationForward(headingRad: number): { x: number; y: number; z: number } {
+  return { x: Math.sin(headingRad), y: 0, z: Math.cos(headingRad) };
+}
 
 /**
  * Fraction of the hull's height occupied by the sloped upper glacis.

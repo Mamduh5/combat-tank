@@ -3,6 +3,7 @@ import { Terrain, type LevelCorridor } from '../../src/core/world/terrain.js';
 import { Battlefield } from '../../src/core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { SPOTTING_TUNING } from '../../src/core/spotting/spotting.js';
 
 /**
  * V6 battlefield correction: the rural railway map, and the graded corridors it is built on.
@@ -237,7 +238,9 @@ describe('the battlefield is drivable', () => {
     { id: 'town route', from: { x: 33, z: -28 }, to: { x: 20, z: -100 } },
     { id: 'elevated flank', from: { x: 33, z: -28 }, to: { x: 165, z: -165 } },
     { id: 'the player opening approach', from: { x: -125, z: 80 }, to: { x: 33, z: -28 } },
-    { id: 'the opponent opening approach', from: { x: 65, z: -55 }, to: { x: 33, z: -28 } },
+    // Now measured from the opponent's current spawn rather than the previous (65, -55), which this pass moved
+  // because it was 233 m away and invisible. Kept as a route so the opening approach stays drivable.
+  { id: 'the opponent opening approach', from: { x: -30, z: -10 }, to: { x: 33, z: -28 } },
   ] as const;
 
   it.each(ROUTES)('can be driven along the $id', ({ id, from, to }) => {
@@ -305,5 +308,121 @@ describe('the battlefield is drivable', () => {
     // rather than at the exact figure, so an ordinary terrain tweak does not break the build — but a
     // regression back to "most of this is a hillside" does.
     expect(comfortable / total).toBeGreaterThan(0.6);
+  });
+});
+
+/**
+ * The single opponent has to be findable.
+ *
+ * ## Why this is a test and not a preference
+ *
+ * The previous V6 opening was authored deliberately: both tanks spawned without line of sight, on the
+ * reasoning that mutual blindness is a tactical opening rather than a standoff. The owner played it and could
+ * not find the enemy at all. Measuring it against the real `Battlefield.hasLineOfSight` showed the design was
+ * far worse than "no line of sight" — the opponent was **233 m** away, past the 200 m base sight range, and
+ * driving straight at it revealed it nowhere within 200 m.
+ *
+ * So the opening geometry was independently broken, quite apart from the control bugs, and it needed
+ * correcting on its own evidence. These tests pin the corrected property so a later map tweak cannot quietly
+ * restore a search with no guarantee of a result.
+ *
+ * `tools/measure-contact.mjs` prints the same survey for tuning.
+ */
+describe('the opponent is findable from the opening', () => {
+  const field = new Battlefield(MARLOWE_CROSSING);
+  const player = MARLOWE_CROSSING.playerSpawn;
+  const enemy = MARLOWE_CROSSING.enemySpawn;
+
+  /** Turret-roof eye height on both tanks, matching what the spotting system reasons about. */
+  const eye = (x: number, z: number) => ({
+    x,
+    y: field.terrain.heightAt(x, z) + PLACEHOLDER_TANK.turret.ringHeightM,
+    z,
+  });
+
+  const openingRange = Math.hypot(enemy.x - player.x, enemy.z - player.z);
+  const bearingToEnemy = Math.atan2(enemy.x - player.x, enemy.z - player.z);
+
+  it('starts inside the spotting band, so the view is immediately actionable', () => {
+    // Beyond `baseSightRangeM` (200 m) the opening view cannot produce contact at all, which is precisely how
+    // the previous 233 m spawn failed. Asserted against the tuning constant rather than a copied literal so
+    // the two cannot drift apart.
+    //
+    // The upper bound is deliberately the spotting band and *not* the opponent's 130 m firing limit. A
+    // separation it cannot shoot across is still a perfectly good opening: the player can see it, range it and
+    // close, and gets a few seconds to decide how to do that. Pinning it to the AI's own band would make
+    // every future decision about that limit silently constrain the map as well, which is the coupling this
+    // test is trying to avoid.
+    expect(openingRange, 'the opponent must start within spotting range').toBeLessThan(
+      SPOTTING_TUNING.baseSightRangeM,
+    );
+    // And not so close that the opening is a muzzle duel with no chance to react.
+    expect(openingRange).toBeGreaterThan(90);
+  });
+
+  it('gives the player time to react before the first shot is likely', () => {
+    // The one risk of making the opponent visible at spawn is an unavoidable opening hit. At 146 m the player
+    // has roughly two seconds of the opponent's approach before it is inside its own firing band, and the
+    // opponent still has to traverse its turret. Asserted as a range rather than as a simulation of the
+    // opponent's behaviour, because the thing being guaranteed is *map geometry*, not AI timing — the AI is
+    // explicitly out of scope for this pass.
+    expect(openingRange).toBeGreaterThan(120);
+  });
+
+  it('is already visible to the player at spawn, with no driving required', () => {
+    // The property the owner asked for: "I know where the fight is", not "spend several minutes locating one
+    // tank". Measured through the same `hasLineOfSight` the simulation uses, so a cottage or swell that would
+    // genuinely block the view fails this rather than being argued away.
+    expect(
+      field.hasLineOfSight(eye(player.x, player.z), eye(enemy.x, enemy.z), 64, 0.6).clear,
+      'the opponent must be visible from the player spawn',
+    ).toBe(true);
+  });
+
+  it('sits within the arc the player is already facing at spawn', () => {
+    // Visible but off to one side would still be a hunt. 30 degrees is generous: the opening heading frames
+    // the level crossing and the village, so a little lateral offset is intended and fine.
+    const offsetDeg = ((((bearingToEnemy - player.headingRad) * 180) / Math.PI + 540) % 360) - 180;
+    expect(Math.abs(offsetDeg), 'the opponent must be within the opening frame').toBeLessThan(30);
+  });
+
+  it('faces the player, so the opening is a duel rather than an ambush', () => {
+    // Now that contact exists at spawn this matters in a way it did not before: an opponent broadside to the
+    // player hands them the flank for free, and one facing away gives the player an unanswered first shot.
+    // Facing the player presents the strongest frontal armour, which is the point the original spawn pair
+    // was also trying to make - it just could not deliver it through 233 m of intervening ground.
+    const bearingToPlayer = Math.atan2(player.x - enemy.x, player.z - enemy.z);
+    const facingErrDeg =
+      Math.abs(((((bearingToPlayer - enemy.headingRad) * 180) / Math.PI + 540) % 360) - 180);
+    expect(facingErrDeg, 'the opponent must face the player').toBeLessThan(5);
+  });
+
+  it('can close from its spawn to inside its own firing band', () => {
+    // ## The property that a findability-only check would have missed
+    //
+    // Two candidate spawns satisfied every visibility test above - visible at 146 m, 2 degrees off the
+    // opening heading - and both scored **zero damage** against a parked player across every seed. Both sat
+    // on the central swell, and an opponent perched there cannot manoeuvre against a player at its foot: it
+    // holds at long range and the fight never starts.
+    //
+    // That is a findable opening which is not a playable one, and it was found by running the real opponent
+    // controller rather than by reasoning about the map. `tools/measure-contact.mjs` prints the comparison.
+    //
+    // What is asserted here is the cheap geometric proxy: the ground from the opponent's spawn to the
+    // player's own position must be drivable, so closing is possible at all. This is not the AI's decision to
+    // make - the AI is out of scope for this pass - but a spawn the opponent physically cannot leave is a
+    // map bug rather than a tactics problem.
+    const steps = 20;
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const x = enemy.x + (player.x - enemy.x) * t;
+      const z = enemy.z + (player.z - enemy.z) * t;
+      const dirX = (player.x - enemy.x) / openingRange;
+      const dirZ = (player.z - enemy.z) / openingRange;
+      expect(
+        field.terrain.slopeDegreesAlong(x, z, dirX, dirZ),
+        `closing gradient at ${x.toFixed(0)},${z.toFixed(0)}`,
+      ).toBeLessThan(PLACEHOLDER_TANK.ground.maxClimbDeg);
+    }
   });
 });

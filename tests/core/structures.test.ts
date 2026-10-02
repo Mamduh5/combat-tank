@@ -9,6 +9,7 @@ import {
 import { Battlefield } from '../../src/core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
 import { vec3 } from '../../src/shared/vec3.js';
+import { SPOTTING_TUNING } from '../../src/core/spotting/spotting.js';
 
 /**
  * V6 tests: hard cover.
@@ -185,16 +186,35 @@ describe('the map says one thing and the simulation agrees', () => {
     expect(battlefield.hasLineOfSight(onField, inHollow).clear).toBe(false);
   });
 
-  it('cannot start with the two sides already in sight of each other', () => {
-    // A design property, asserted so it cannot rot. An opening across open ground would hand the player
-    // a free shot and make the first thirty seconds a trade rather than a search. The central swell is
-    // the object that guarantees it.
+  it('starts with the two sides in sight of each other, at a range that is actually playable', () => {
+    // ## This assertion was inverted in this correction pass, and the reason is the point
+    //
+    // It previously asserted the spawns had **no** line of sight, on the reasoning that mutual blindness is a
+    // tactical opening rather than a standoff. The owner played the build and reported being unable to find
+    // the enemy at all. Measurement then showed the design was worse than a standoff:
+    //
+    //   - the opponent spawned **233 m** away, past the 200 m base sight range, so even a clear view could
+    //     not produce contact;
+    //   - driving straight at it revealed it **nowhere** within 200 m.
+    //
+    // So the opening was a search with no guarantee of a result, on a 500x500 m map, with no compass and no
+    // marker. Hiding the only opponent at match start is defensible when there are many of them; for a
+    // prototype containing exactly one it only creates wandering.
+    //
+    // The brief is explicit that the goal is "I know where the fight is", not "spend several minutes locating
+    // one tank". So the property is now inverted: contact exists at spawn, and at a range inside the spotting
+    // band rather than a free point-blank shot. The findability details are pinned in
+    // `rural-railway-map.test.ts`; this test keeps the map and the simulation agreeing about it.
     const a = battlefield.playerSpawn;
     const b = battlefield.enemySpawn;
     const from = vec3(a.x, battlefield.terrain.heightAt(a.x, a.z) + 1.42, a.z);
     const to = vec3(b.x, battlefield.terrain.heightAt(b.x, b.z) + 1.42, b.z);
 
-    expect(battlefield.hasLineOfSight(from, to).clear).toBe(false);
+    const rangeM = Math.hypot(b.x - a.x, b.z - a.z);
+    expect(battlefield.hasLineOfSight(from, to).clear, 'the opening must offer contact').toBe(true);
+    // Inside spotting range, so the view is actionable, and not so close it is a coin-flip.
+    expect(rangeM).toBeLessThan(SPOTTING_TUNING.baseSightRangeM);
+    expect(rangeM).toBeGreaterThan(90);
   });
 
   it('puts a low wall that shells stop at on the map, as well as one sight passes over', () => {

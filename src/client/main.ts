@@ -251,6 +251,19 @@ async function bootstrap(): Promise<void> {
       restartEncounter();
     }
 
+    // `C` recentres the camera behind the hull. Polled here, for the same reason as restart: it works
+    // whether or not the pointer is locked, and a one-shot press cannot be missed on a slow frame.
+    //
+    // **This was never wired up.** `KeyC` was tracked in `InputManager` and had its default browser
+    // behaviour suppressed, and `OrbitCamera.recentreBehind` existed and was correct — but nothing ever
+    // called either. `consumeKeyPress` had no call sites at all. So the documented escape hatch was inert,
+    // and because automatic recovery had recently been removed as well, a player who looked away from their
+    // tank had *no* way back at all. Found by driving the key in a real browser rather than by reading the
+    // code: every unit test passed, because the key handler was never exercised by one.
+    if (input.consumeKeyPress('KeyC')) {
+      orbitCamera.recentreBehind(simulation.vehicle.state.headingRad);
+    }
+
     const state = simulation.vehicle.state;
 
     // Counted before anything reads the HUD, so the flash and the shot counter agree about what was
@@ -271,10 +284,8 @@ async function bootstrap(): Promise<void> {
       input.consumeLookDelta(),
       input.consumeZoomDelta(),
       deltaSeconds,
-      // The hull heading, so the camera is carried by hull rotation. Without it the orbit is
-      // world-fixed and never relates to where the tank points, and W reads as reverse whenever
-      // the camera happens to end up on the tank nose side.
-      state.headingRad,
+      // No hull heading. The camera's yaw is world-space and mouse-only, so A/D rotates the tank
+      // underneath the view without rotating the view. See camera/orbit-camera.ts.
     );
 
     // 6. Presentation effects for the shells and impacts the simulation reported this frame.

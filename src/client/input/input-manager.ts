@@ -11,16 +11,21 @@ import type { Vec3 } from '../../shared/vec3.js';
  * Controls follow the owner's decision on OD-02 — **direct WASD hull control**:
  *   - W / S: forward and reverse throttle.
  *   - A / D: rotate the hull.
- *   - Mouse: look direction, which moves the camera only.
- *   - C: return the camera directly behind the hull.
+ *   - Mouse: camera orientation. World-space, and the only thing that moves it.
+ *   - C: recentre the camera behind the hull, once.
  *
- * The camera swings freely and is tracked *relative* to the hull, so mouse-look stays independent while
- * the player always has a recoverable relationship between where the tank points and where they are
- * looking. See camera/orbit-camera.ts for why that distinction was measured rather than assumed.
+ * ## The separation this file is responsible for
  *
- * The hull is never rotated toward where the camera is pointing. Camera and hull are genuinely
- * independent, which is the control model the genre asks for: where you look and where your tank
- * faces are two different decisions.
+ * WASD drives the hull and the mouse drives the camera, and neither touches the other. A previous
+ * version tracked the camera's yaw *relative to the hull*, which made A/D rotate the camera by exactly
+ * the amount the hull turned — the owner reported it as "A/D rotates the camera and makes steering
+ * extremely confusing". There is also no automatic recentring; the only re-anchor is the player's
+ * explicit `C` press, because the old automatic recovery pulled the camera away from any view they
+ * had deliberately chosen.
+ *
+ * The result is the behaviour the genre actually asks for: **drive east while looking and aiming
+ * north.** The hull is never rotated toward where the camera points, and the camera is never rotated
+ * because the hull turned.
  */
 
 /** Radians of camera rotation per pixel of mouse movement. A tuning parameter, not a constant. */

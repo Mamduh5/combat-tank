@@ -119,7 +119,16 @@ export class CDP {
     return Buffer.concat([header, mask, data]);
   }
 
-  send(method, params = {}) {
+  /**
+   * Sends one command and resolves its reply.
+   *
+   * `timeoutMs` is per call rather than fixed, because the work varies enormously by method. A single
+   * `Runtime.evaluate` driving the game through a scripted control sequence legitimately takes minutes under
+   * a software renderer, and a timeout sized for the shortest call would abandon it while a genuinely hung
+   * command would then never be reported. Anything that legitimately needs longer passes it explicitly, so
+   * the default still means "this should have been instant".
+   */
+  send(method, params = {}, timeoutMs = 60000) {
     const id = ++this.id;
     this.sock.write(this.frame(JSON.stringify({ id, method, params })));
     return new Promise((resolve, reject) => {
@@ -129,7 +138,7 @@ export class CDP {
           this.pending.delete(id);
           reject(new Error(`CDP timeout: ${method}`));
         }
-      }, 60000);
+      }, timeoutMs);
     });
   }
 

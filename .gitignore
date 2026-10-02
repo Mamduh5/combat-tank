@@ -26,9 +26,11 @@ Thumbs.db
 *.ctreplay
 logs/
 
-# Visual-review artifacts (tools/shot.mjs output and the headless browser profile)
+# Visual-review artifacts (tools/shot.mjs output and the headless browser profiles)
 shots/
-.chrome-profile/
+# One profile per browser harness, so two harnesses can run at once without colliding on a locked
+# `SingletonLock`. `tools/control-check.mjs` adds `.chrome-profile-controls`.
+.chrome-profile*/
 
 # Local dev-server and verification logs. These are written by vite preview and by
 # the ad-hoc verification runs; none of them are project artefacts.

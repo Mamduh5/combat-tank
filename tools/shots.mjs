@@ -71,6 +71,11 @@ const VIEWS = [
   { name: 'overview', group: 'layout', question: 'Is the railway readable as a landmark from above?' },
   { name: 'layout', group: 'layout', question: 'Can the map be described as town / railway / fields / elevated side?' },
   { name: 'railway', group: 'railway', question: 'Does the graded line read as a railway?' },
+  // Added in this correction pass. The owner could not find the railway, and every existing railway view was
+  // either aerial or at 9-14 m, which is a diagram view or a hovering view. These two sit at turret height and
+  // at normal third-person height: the heights the game is actually played from.
+  { name: 'railwayEye', group: 'railway', question: 'At eye level, is that unmistakably a railway?' },
+  { name: 'railwayApproach', group: 'railway', question: 'Approaching across fields, is the line announced in time?' },
   { name: 'crossing', group: 'railway', question: 'Does the level crossing read as a crossing, from the road?' },
   { name: 'station', group: 'railway', question: 'Does the railway read as a place, with a platform and a building?' },
   { name: 'tankAtRailway', group: 'grounding', question: 'Is the tank grounded on the railway, at the right scale?' },
@@ -82,6 +87,8 @@ const VIEWS = [
   { name: 'cairn', group: 'elevation', question: 'Does the elevated flank overlook the map without being a wall?' },
   { name: 'tankOnHill', group: 'grounding', question: 'Is the tank grounded on a real hill?' },
   { name: 'playerspawn', group: 'spawns', question: 'Does the opening view frame the tank and the direction of play?' },
+  { name: 'opening', group: 'spawns', question: 'Can the player see the opponent, the railway and the crossing at once?' },
+  { name: 'contact', group: 'spawns', question: 'Is the opponent visible on the opening approach, at a usable range?' },
   { name: 'enemyspawn', group: 'spawns', question: 'Does the opponent open on sensible ground with routes available?' },
   { name: 'cover', group: 'combat', question: 'Is there cover on the flanks of the town road?' },
 ];

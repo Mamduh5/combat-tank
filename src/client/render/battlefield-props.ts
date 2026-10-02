@@ -22,12 +22,12 @@ import type { PlacedStructure, StructureKind } from '../../core/world/structures
  *
  * - **no external assets, therefore no licence, no attribution, and no redistribution conditions**;
  * - **no download**, so the game boots offline and the build grows no asset pipeline;
- * - **no placeholder-looking boxes** — the specific complaint the brief raises about V5.
+ * - **no placeholder-looking boxes** â€” the specific complaint the brief raises about V5.
  *
  * The cost is honest and worth stating: these are *prototype* assets. They read as an intentional
  * environment rather than as a finished one, and they are not suitable as final art. What they do buy
  * is that a building looks like a building, a treeline looks like a treeline, and the player can tell
- * the red barn from the mill from the outpost at a glance — which is what the brief's "map readability"
+ * the red barn from the mill from the outpost at a glance â€” which is what the brief's "map readability"
  * requirement actually needs.
  *
  * ## Everything is built from the map data, not from a parallel list
@@ -43,7 +43,7 @@ import type { PlacedStructure, StructureKind } from '../../core/world/structures
  *
  * **Brighter than they look like they should be, deliberately.** The sun is angled steeply, so a wall
  * turned away from it receives only the hemispheric ambient and renders near-black. The first pass at this
- * map used plausible mid-tones and produced a village made of dark silhouettes — technically lit, visually
+ * map used plausible mid-tones and produced a village made of dark silhouettes â€” technically lit, visually
  * unreadable. Rural English brick and lime render are pale anyway, so raising these is closer to reality as
  * well as to usable.
  */
@@ -60,21 +60,40 @@ const PALETTE = {
   foliageLight: new Color3(0.27, 0.39, 0.18),
   trunk: new Color3(0.28, 0.21, 0.14),
 
-  // Railway and road surfaces. Kept apart on purpose: ballast is pale grey crushed stone, sleepers are
+  // Railway and road surfaces. Kept apart on purpose: ballast is grey crushed stone, sleepers are
   // creosoted dark timber, and rails are the one genuinely bright metal on the map. A railway drawn in
   // one flat brown reads as a path with lines on it.
   //
-  // The ballast is deliberately the *lightest* thing on the ground. The brief asks the railway to be the
-  // map's major geographical landmark, and a landmark has to be visible from a tactical camera; at 3.6 m
-  // half-width in mid-grey it vanished and the map read as open country with a scratch on it.
-  ballast: new Color3(0.62, 0.6, 0.56),
+  // ## The ballast is **cool**, and that is the whole fix
+  //
+  // It was (0.62, 0.60, 0.56) on the stated reasoning that the railway must be "the lightest thing on the
+  // ground". The owner could not find the railway at all, and the terrain ramp is why: the top band of
+  // `SCENE_TUNING.groundBands` is (0.62, 0.59, 0.47). Those two colours are within 0.02 of each other on
+  // every channel, so wherever the line crossed the upper ground it was painted almost exactly the colour
+  // it was supposed to stand out from. Being the lightest thing only works if nothing else is.
+  //
+  // So the rule is now **contrast against the whole ramp, not brightness**. The terrain bands run from
+  // dark olive (0.21, 0.25, 0.16) through dry green to pale tan (0.62, 0.59, 0.47) - warm, green, and
+  // never neutral. A desaturated blue-grey sits apart from all of them at once, and a mid value keeps it
+  // readable over both the dark low ground and the pale ridges.
+  ballast: new Color3(0.4, 0.42, 0.47),
+  /**
+   * The cess: the darker strip of ground either side of the ballast.
+   *
+   * Added in this pass. A single 11 m ribbon lying on open country reads as a coloured stripe and nothing
+   * more, because it has no edge. The cess gives the formation a defined border on both sides, which is
+   * what makes the railway read as a raised, built thing rather than a texture painted on the fields.
+   */
+  cess: new Color3(0.3, 0.29, 0.26),
   sleeper: new Color3(0.3, 0.24, 0.19),
-  rail: new Color3(0.72, 0.71, 0.69),
+  rail: new Color3(0.78, 0.77, 0.75),
   road: new Color3(0.52, 0.48, 0.43),
   track: new Color3(0.56, 0.5, 0.4),
   deck: new Color3(0.44, 0.35, 0.26),
   post: new Color3(0.62, 0.58, 0.52),
   platform: new Color3(0.58, 0.55, 0.5),
+  /** Telegraph pole: creosoted timber, deliberately darker than the grass it crosses. */
+  pole: new Color3(0.26, 0.21, 0.16),
 } as const;
 
 /**
@@ -136,12 +155,22 @@ const RAILWAY = {
   /**
    * How far the ballast shoulder extends beyond the centreline, metres.
    *
-   * 3.6 m is a realistic four-track formation, and it is what the first draft used — which made the
+   * 3.6 m is a realistic four-track formation, and it is what the first draft used â€” which made the
    * railway invisible from a tactical camera and therefore not the landmark the design needs it to be.
    * 5.5 m is a wide embankment top, and at this prototype's colour and fog it is the difference between a
    * map with a railway on it and a map with a scratch on it.
    */
   ballastHalfWidthM: 5.5,
+  /**
+   * How far the cess extends beyond the ballast on each side, metres, and how proud of the ground it sits.
+   *
+   * Added in this correction pass. The ballast alone had no border, so at gameplay camera height the railway
+   * was a 11 m band of near-ground-coloured ribbon lying flat on the fields. The cess is a wider, darker
+   * skirt underneath it, which gives the formation two visible edges instead of none. 3.5 m either side puts
+   * the total formation at 18 m, about the footprint of a real four-track embankment top plus its shoulders.
+   */
+  cessHalfWidthM: 3.5,
+  cessHeightM: 0.06,
   /**
    * How proud of the surrounding ground the ballast sits, metres.
    *
@@ -149,7 +178,7 @@ const RAILWAY = {
    * also, less honestly, the reason the railway is visible at all: the shared terrain mesh is 160 cells
    * across 500 m, so its triangles linearly interpolate between samples that are 3 m apart, and on concave
    * ground that surface sits *above* the true height by a couple of centimetres. A ribbon laid 10 cm up is
-   * swallowed by it — which is exactly what happened, and why the first railway rendered as a hairline
+   * swallowed by it â€” which is exactly what happened, and why the first railway rendered as a hairline
    * with no ballast at all.
    */
   ballastHeightM: 0.55,
@@ -158,6 +187,31 @@ const RAILWAY = {
   /** Station platform: a metre above rail, running beside the line. */
   platformHeightM: 0.95,
   platformWidthM: 3.2,
+
+  /**
+   * Telegraph poles: height, spacing, and how far they stand from the centreline, metres.
+   *
+   * ## Why the poles matter more than any other piece of this work
+   *
+   * Ballast, sleepers and rails are all *horizontal*. From a third-person camera — which looks along the
+   * ground from about eight metres up — a horizontal feature on a flat plain has almost no silhouette: it
+   * subtends a thin band and the eye has nothing to lock onto, so the railway reads as a texture on the
+   * fields rather than as a line running through them. That is the actual reason the owner could not find it,
+   * and widening or re-colouring the ballast alone would not fix it.
+   *
+   * Upright poles give the line a repeating vertical rhythm. That rhythm is legible in silhouette from far
+   * further away than the rails are, it survives being seen end-on rather than across, and it is the cue
+   * players already associate with "railway" from every other game and photograph of one. A 9 m pole is also
+   * tall enough to clear the 5.4 m canopy of the vegetation that is otherwise allowed to grow over the line.
+   *
+   * Spacing is 55 m, near the real thing's 60-70 m and far enough apart not to become visual noise at distance.
+   */
+  poleHeightM: 9,
+  poleSpacingM: 55,
+  /** Which side of the line the poles stand on. One side only, as on a real single-track formation. */
+  poleOffsetM: 8.5,
+  /** Pole spacing across the top of the pole, metres. The horizontal bars are what make it read as a pole. */
+  poleArmWidthM: 2.2,
 } as const;
 
 /** Road surfacing widths, metres. */
@@ -172,7 +226,7 @@ const ROAD_WIDTHS: Readonly<Record<string, number>> = {
  *
  * The same shape of integer hash the terrain uses, rather than a second one written from scratch. Every
  * scattered tree and bush is placed from this, so the battlefield looks identical on every run and on
- * every machine — which is what makes a screenshot comparable to the last one.
+ * every machine â€” which is what makes a screenshot comparable to the last one.
  */
 function seededOffset(seed: number, index: number, spreadM: number): number {
   let h = (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
@@ -196,7 +250,7 @@ function seedFrom(text: string): number {
  * A rough, non-shiny material. Reused per colour so the scene does not accumulate hundreds of them.
  *
  * The **emissive lift** is the notable part. The sun is a single directional light at a steep angle, so
- * every wall turned away from it gets only the hemispheric ambient and renders almost black — a village of
+ * every wall turned away from it gets only the hemispheric ambient and renders almost black â€” a village of
  * solid silhouettes. A small self-lit floor keeps the shadow side readable as *material* without washing
  * out the lit side, which is the standard trick for readable prototype art and costs nothing.
  */
@@ -521,7 +575,7 @@ function buildRibbon(
   //
   // `ComputeNormals` derives the normal from the triangle's winding, and a ribbon's winding flips with the
   // direction its corridor happens to run. When that puts the normal *downward* the surface is lit from
-  // underneath, receives no sun, and renders as a flat black stripe — which is precisely what the first
+  // underneath, receives no sun, and renders as a flat black stripe â€” which is precisely what the first
   // version of the railway looked like: a correct shape in a colour nobody would choose for stone.
   //
   // A road and a rail bed are, by construction, near-horizontal ground surfaces. Their shading normal is
@@ -550,7 +604,7 @@ function buildRibbon(
  * Sleepers and rails for one line.
  *
  * **Merged into single meshes, and that is not an optimisation detail.** Individually, 600 m of railway
- * at 0.65 m sleeper spacing is over 900 boxes plus two long rails — enough separate draw calls to
+ * at 0.65 m sleeper spacing is over 900 boxes plus two long rails â€” enough separate draw calls to
  * dominate the frame and make the map unplayable. `Mesh.MergeMeshes` collapses each family into one mesh,
  * taking the whole railway from roughly a thousand draws to three, and is the difference between the line
  * being a landmark and being a slideshow.
@@ -560,9 +614,32 @@ function buildRailway(
   root: TransformNode,
   samples: readonly CorridorSample[],
   heightAt: (x: number, z: number) => number,
-  materials: { ballast: StandardMaterial; sleeper: StandardMaterial; rail: StandardMaterial },
+  materials: {
+    ballast: StandardMaterial;
+    cess: StandardMaterial;
+    sleeper: StandardMaterial;
+    rail: StandardMaterial;
+    pole: StandardMaterial;
+  },
 ): Mesh[] {
   const meshes: Mesh[] = [];
+
+  // The cess goes down first so the ballast is drawn over it: a wider, darker strip under a narrower, lighter
+  // one. This is the "built thing with an edge" cue. Without it the formation is a stripe on grass with no
+  // border, which is the thing that made the line read as a scratch on the map rather than a railway.
+  const cess = buildRibbon(
+    scene,
+    'railway-cess',
+    samples,
+    RAILWAY.ballastHalfWidthM + RAILWAY.cessHalfWidthM,
+    RAILWAY.cessHeightM,
+    materials.cess,
+    root,
+    heightAt,
+  );
+  if (cess !== null) {
+    meshes.push(cess);
+  }
 
   const ballast = buildRibbon(
     scene,
@@ -644,7 +721,114 @@ function buildRailway(
     }
   }
 
+  // --- Telegraph poles: the vertical rhythm that makes the line findable ---
+  const pole = buildTelegraphPoles(scene, root, samples, heightAt, materials.pole);
+  if (pole !== null) {
+    meshes.push(pole);
+  }
+
   return meshes;
+}
+
+/**
+ * Telegraph poles along one side of the line, merged into a single mesh.
+ *
+ * ## Why this is the most important thing in this file for readability
+ *
+ * Everything else on a railway is horizontal. From a third-person camera about eight metres above the
+ * ground, a horizontal feature on near-level country has almost no silhouette — it subtends a thin band with
+ * a background of more ground behind it, and the eye finds nothing to lock onto. That is why the owner
+ * reported not being able to find the railway even though a great deal of railway geometry existed: the
+ * ballast, sleepers and rails were all drawn, all correctly coloured after the previous pass, and none of it
+ * was *legible as a railway* from where a player actually looks from.
+ *
+ * Upright poles solve that directly. They give the line a repeating vertical rhythm that is visible in
+ * silhouette, at three times the range of the rails themselves, in every viewing direction including end-on,
+ * and they clear the 5.4 m vegetation canopy that is otherwise free to grow over the line and hide it.
+ *
+ * ## Construction
+ *
+ * Each pole is a tapered cylinder plus two cross-arms, standing off to one side of the formation as a real
+ * single-track line does. Merged into one mesh for the same reason the sleepers are: at 55 m spacing over
+ * 600 m that is a few dozen poles and three boxes each, which is not a draw-call problem worth having, but
+ * merging costs one line and keeps the frame budget where the sleepers already put it.
+ */
+function buildTelegraphPoles(
+  scene: Scene,
+  root: TransformNode,
+  samples: readonly CorridorSample[],
+  heightAt: (x: number, z: number) => number,
+  material: StandardMaterial,
+): Mesh | null {
+  const parts: Mesh[] = [];
+
+  // Walked by distance rather than by sample index, so the spacing is correct across segments of differing
+  // length. The same reasoning as the sleepers: a fixed count-per-sample under-counts badly on a diagonal.
+  let nextPoleM = 0;
+  let travelledM = 0;
+  for (let i = 0; i + 1 < samples.length; i += 1) {
+    const a = samples[i]!;
+    const b = samples[i + 1]!;
+    const step = Math.hypot(b.x - a.x, b.z - a.z);
+    if (step < 1e-6) {
+      continue;
+    }
+
+    while (travelledM + step >= nextPoleM) {
+      // Where along this segment the pole falls.
+      const t = step < 1e-6 ? 0 : (nextPoleM - travelledM) / step;
+      const cx = a.x + (b.x - a.x) * t;
+      const cz = a.z + (b.z - a.z) * t;
+      // Offset to the side of the line, so the poles do not stand in the four-foot.
+      const px = cx + a.acrossX * RAILWAY.poleOffsetM;
+      const pz = cz + a.acrossZ * RAILWAY.poleOffsetM;
+      const groundY = heightAt(px, pz);
+
+      const shaft = MeshBuilder.CreateCylinder(
+        `pole-shaft-${nextPoleM}`,
+        {
+          height: RAILWAY.poleHeightM,
+          diameterTop: 0.22,
+          diameterBottom: 0.34,
+          tessellation: 6,
+        },
+        scene,
+      );
+      shaft.position.set(px, groundY + RAILWAY.poleHeightM * 0.5, pz);
+      parts.push(shaft);
+
+      // Cross-arms near the top. These are what stop the pole reading as a fence post: the bar-and-post
+      // shape is a stronger silhouette cue than the shaft alone at any distance.
+      for (let arm = 0; arm < 2; arm += 1) {
+        const crossArm = MeshBuilder.CreateBox(
+          `pole-arm-${nextPoleM}-${arm}`,
+          { width: RAILWAY.poleArmWidthM, height: 0.14, depth: 0.14 },
+          scene,
+        );
+        crossArm.position.set(
+          px,
+          groundY + RAILWAY.poleHeightM * (0.86 - arm * 0.09),
+          pz,
+        );
+        // Lay the arm across the line, so it is perpendicular to the direction of travel.
+        crossArm.rotation.y = Math.atan2(a.acrossX, a.acrossZ);
+        parts.push(crossArm);
+      }
+
+      nextPoleM += RAILWAY.poleSpacingM;
+    }
+    travelledM += step;
+  }
+
+  const merged = Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+  if (merged === null) {
+    return null;
+  }
+  merged.name = 'railway-telegraph-poles';
+  merged.material = material;
+  merged.isPickable = false;
+  merged.parent = root;
+  return merged;
 }
 
 /**
@@ -652,7 +836,7 @@ function buildRailway(
  *
  * A flat ribbon laid a few centimetres above the graded ground, which is all a road needs to be. The
  * brief is explicit that roads require no special vehicle physics, and this honours that: there is no
- * road collider, no grip change, nothing. The road's job is orientation — telling the player which way the
+ * road collider, no grip change, nothing. The road's job is orientation â€” telling the player which way the
  * village is and suggesting a route without forcing one.
  */
 function buildRoad(
@@ -677,7 +861,7 @@ function buildRoad(
  * the game fighting them.
  *
  * So it gets proper furniture: a timber deck spanning the track, gate posts on both sides, and a pair of
- * signal arms. None of it is solid. The brief's warning — a decorative rail treated as a giant obstacle —
+ * signal arms. None of it is solid. The brief's warning â€” a decorative rail treated as a giant obstacle â€”
  * is the failure this map is most at risk of, and the answer is that **nothing** on the railway is
  * collision. The deck is drawn on ground that is already part of the drivable height field.
  */
@@ -722,7 +906,7 @@ function buildLevelCrossing(
     post.isPickable = false;
     post.parent = root;
 
-    // A raised barrier arm. Angled up, so the crossing reads as *open* rather than blocked — which is
+    // A raised barrier arm. Angled up, so the crossing reads as *open* rather than blocked â€” which is
     // also the honest gameplay signal: nothing here is going to stop a tank.
     const arm = MeshBuilder.CreateBox(
       `crossing-arm-${side}`,
@@ -892,13 +1076,13 @@ export function buildBattlefieldProps(scene: Scene, battlefield: Battlefield): B
   //
   // Driven from the terrain's own graded corridors rather than from a second list here. The corridor is
   // what the height field was cut along, so laying the rails on it means the picture and the drivable
-  // surface cannot disagree — which is the whole reason the railway is a `LevelCorridor` at all.
+  // surface cannot disagree â€” which is the whole reason the railway is a `LevelCorridor` at all.
   const corridors = battlefield.terrain.levelCorridors;
   /**
    * Bound deliberately.
    *
    * `battlefield.terrain.heightAt` passed on its own would lose its receiver, and `heightAt` reads
-   * `this.config` — so the unbound form throws "Cannot read properties of undefined (reading 'config')" the
+   * `this.config` â€” so the unbound form throws "Cannot read properties of undefined (reading 'config')" the
    * moment it is called. TypeScript does not catch it: a method is assignable to a plain function type,
    * which is exactly why this had to be found by running the game. Every helper below therefore takes a
    * function rather than the terrain object, so the mistake cannot be repeated by passing an object.
@@ -906,6 +1090,8 @@ export function buildBattlefieldProps(scene: Scene, battlefield: Battlefield): B
   const heightAt = (x: number, z: number): number => battlefield.terrain.heightAt(x, z);
 
   const ballastMaterial = makeMaterial(scene, 'prop-ballast', PALETTE.ballast);
+  const cessMaterial = makeMaterial(scene, 'prop-cess', PALETTE.cess);
+  const poleMaterial = makeMaterial(scene, 'prop-pole', PALETTE.pole);
   const sleeperMaterial = makeMaterial(scene, 'prop-sleeper', PALETTE.sleeper);
   const railMaterial = makeMaterial(scene, 'prop-rail', PALETTE.rail);
   const roadMaterial = makeMaterial(scene, 'prop-road', PALETTE.road);
@@ -927,8 +1113,10 @@ export function buildBattlefieldProps(scene: Scene, battlefield: Battlefield): B
     if (corridor.id === RAILWAY_CORRIDOR_ID) {
       const built = buildRailway(scene, root, samples, heightAt, {
         ballast: ballastMaterial,
+        cess: cessMaterial,
         sleeper: sleeperMaterial,
         rail: railMaterial,
+        pole: poleMaterial,
       });
       meshCount += built.length;
       for (let i = 1; i < samples.length; i += 1) {

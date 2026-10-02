@@ -4,13 +4,13 @@ import type { Structure } from '../structures.js';
 import type { ConcealmentZone } from '../concealment.js';
 
 /**
- * **Marlowe Crossing** — the V6 battlefield.
+ * **Marlowe Crossing** Ã¢â‚¬â€ the V6 battlefield.
  *
  * ## What replaced what, and why
  *
  * The previous map was a mountain valley: a long ridge down one side, a cut down the other, and a floor
  * between them that was still sloped. It looked like a map from above and felt like driving on a
- * hillside almost everywhere. That is not fixed by making the terrain flat — it is a problem of
+ * hillside almost everywhere. That is not fixed by making the terrain flat Ã¢â‚¬â€ it is a problem of
  * *proportion*. A map is enjoyable when most of its surface is comfortable and the difficult parts are
  * named places you choose to go to.
  *
@@ -23,30 +23,30 @@ import type { ConcealmentZone } from '../concealment.js';
  *
  * ## The four routes, and what each one costs you
  *
- * 1. **The town route** — through Marlowe village, between the cottages, the goods shed and the water
+ * 1. **The town route** Ã¢â‚¬â€ through Marlowe village, between the cottages, the goods shed and the water
  *    tower. Short sight lines, hard cover on both flanks, and movement measured in metres. You will not
  *    get a long shot here. You will also not be shot from two hundred metres.
- * 2. **The railway route** — along the graded line, crossing at the level crossing. The fastest way
+ * 2. **The railway route** Ã¢â‚¬â€ along the graded line, crossing at the level crossing. The fastest way
  *    across the map and the most exposed thing on it: the embankment is raised, the ground either side
  *    falls away, and there is nowhere to hide that does not read as a hiding place.
- * 3. **The field route** — south of the line, through open ground. This is where the tank finally
+ * 3. **The field route** Ã¢â‚¬â€ south of the line, through open ground. This is where the tank finally
  *    accelerates, turns at speed, and takes a long shot. It is also where both sides can see each other
  *    coming, so it is the route that ends fights fastest and worst.
- * 4. **The elevated flank** — Cairn Height in the north-east. It overlooks the crossing and the eastern
+ * 4. **The elevated flank** Ã¢â‚¬â€ Cairn Height in the north-east. It overlooks the crossing and the eastern
  *    fields, and it costs a long exposed drive to reach. The trade is explicit: sight lines for travel.
  *
  * ## Why the railway is *graded* rather than drawn on
  *
  * The line is a `LevelCorridor` in the height field rather than a strip of meshes laid over the ground.
  * A real railway is cut and filled to hold a gentle gradient across country that is not level, and the
- * visible result — a cutting through a rise, an embankment across a hollow — is exactly what you get
+ * visible result Ã¢â‚¬â€ a cutting through a rise, an embankment across a hollow Ã¢â‚¬â€ is exactly what you get
  * here. It also means the crossing is genuinely flat and genuinely crossable, because the ground under
  * it is part of the same surface the vehicles drive on. See `LevelCorridor` in `terrain.ts`.
  *
  * ## The ground, stated as a driveability constraint
  *
  * The base terrain runs at 2.2 m amplitude across three ridge layers, which puts the worst procedurally
- * generated ground near 14 degrees — rolling country, not hillside. Every authored hill is a chain of
+ * generated ground near 14 degrees Ã¢â‚¬â€ rolling country, not hillside. Every authored hill is a chain of
  * broad bumps whose steepest face is around 12 degrees, comfortably under the vehicle's 26 degree climb
  * limit, and the only deliberately steeper ground is at the map edge where it is framing rather than
  * route.
@@ -70,20 +70,20 @@ const HALF_SIZE_M = 250;
  *
  * That per-feature number is not the whole story, and getting that wrong is what the first draft of this
  * map did. `coverHeight` **adds** every overlapping feature's contribution, so a chain of individually
- * gentle bumps is not gentle — it is as steep as the sum of their gradients at the point where their
+ * gentle bumps is not gentle Ã¢â‚¬â€ it is as steep as the sum of their gradients at the point where their
  * slopes coincide. Overlap has to be budgeted for, not assumed away. The measurement tool exists because
  * of exactly this: the authored ratios all looked reasonable and the result was a 43 degree face.
  *
  * The shapes are chosen for tactical roles, not for scenery:
  *
- *  - **Cairn Height** is a chain of four bumps running north-east. Overlapping is the point — one wide
- *    bump reads as a lump, a chain reads as a ridge with a crest you can find hull-down ground on — but
+ *  - **Cairn Height** is a chain of four bumps running north-east. Overlapping is the point Ã¢â‚¬â€ one wide
+ *    bump reads as a lump, a chain reads as a ridge with a crest you can find hull-down ground on Ã¢â‚¬â€ but
  *    they are kept wide and low and spaced so their steep faces do not coincide. This is the map's only
  *    real high ground and the most exposed place on it to reach.
  *  - **The central swell** is the most important object in the list and the least impressive. A 3.6 m rise
  *    across 50 m looks like nothing from the air, but it sits between the two spawns and is tall enough
  *    to break a sight line between hulls at 1.42 m. It is what makes the opening a search rather than a
- *    free shot, and a tank crosses it without noticing it is there — which is the whole point.
+ *    free shot, and a tank crosses it without noticing it is there Ã¢â‚¬â€ which is the whole point.
  *  - **The hollows** are local depressions. They give a tank somewhere to be that is below the sight line
  *    of the ground around it, without the map ever becoming a trench network.
  */
@@ -94,7 +94,7 @@ const COVER_FEATURES: readonly ArenaCover[] = [
   // Cairn Height: the elevated flank, north-east.
   //
   // **These four numbers are the result of measuring, not of choosing.** The first draft had them taller
-  // and further out, and the measurement tool reported a 43.8 degree face on the approach — undriveable.
+  // and further out, and the measurement tool reported a 43.8 degree face on the approach Ã¢â‚¬â€ undriveable.
   // Three causes, all worth recording because none is obvious:
   //
   //  - `coverHeight` *adds* every overlapping feature's contribution, so a chain of individually gentle
@@ -138,7 +138,7 @@ const COVER_FEATURES: readonly ArenaCover[] = [
  * above the field to its south, the result reads as an embankment, which is what it should look like.
  *
  * The town road's elevation is pinned to the mainline's **at the crossing** (`2.05 m`). That single number
- * is what makes the level crossing flat rather than a step, and it is asserted by test — a crossing that
+ * is what makes the level crossing flat rather than a step, and it is asserted by test Ã¢â‚¬â€ a crossing that
  * is a 40 cm lip is technically crossable and still feels broken.
  */
 const ROUTES: readonly LevelCorridor[] = [
@@ -218,7 +218,7 @@ export const LEVEL_CROSSING = { x: 33, z: -28 } as const;
  * where they would be tidy.
  *
  * **Nothing is placed on a route.** The town road corridor, the railway, and the rural road are all kept
- * clear, and there is a test asserting it — a wall across the main artery of a map is a bug that looks
+ * clear, and there is a test asserting it Ã¢â‚¬â€ a wall across the main artery of a map is a bug that looks
  * exactly like level design until you try to drive through it.
  */
 const STRUCTURES: readonly Structure[] = [
@@ -326,7 +326,7 @@ const STRUCTURES: readonly Structure[] = [
   // --- The crossing's cover ------------------------------------------------------------------
   // Placed to the *sides* of the road, never on it. The crossing is meant to be the most exposed place
   // on the map, and the way to make that readable rather than merely punishing is to give both banks
-  // something to hide behind — so committing to the crossing is a decision with a plan behind it.
+  // something to hide behind Ã¢â‚¬â€ so committing to the crossing is a decision with a plan behind it.
   { id: 'crossing-wall-west', kind: 'barrier', x: 18, z: -22, halfLengthM: 6, halfWidthM: 0.8, heightM: 1.9, yawRad: 0.1, blocksSight: true },
   { id: 'crossing-wall-east', kind: 'barrier', x: 50, z: -20, halfLengthM: 6, halfWidthM: 0.8, heightM: 1.9, yawRad: -0.1, blocksSight: true },
 
@@ -386,7 +386,7 @@ const CONCEALMENT: readonly ConcealmentZone[] = [
 /**
  * Named places.
  *
- * These exist so the map can be talked about — by tools, by tests, and by the debug overlay — in the
+ * These exist so the map can be talked about Ã¢â‚¬â€ by tools, by tests, and by the debug overlay Ã¢â‚¬â€ in the
  * same four words the player uses. The ids deliberately match the routes above: `mainline` is both the
  * railway corridor and the zone that names it.
  */
@@ -398,25 +398,47 @@ const ZONES: readonly MapZone[] = [
   { id: 'marlowe-wood', x: 150, z: -190, radiusM: 52, role: 'Heavy concealment. The only real hiding place.' },
   { id: 'mainline', x: 0, z: -30, radiusM: 60, role: 'The railway. A graded route and a route divider.' },
 ];
-
 /**
  * The assembled map.
  *
  * ## Why the spawns are where they are
  *
- * Both are on gentle ground, both face roughly toward the middle of the map, and neither can see the
- * other — the central swell is what breaks that line, and it is asserted by test.
+ * Both are on gentle ground and both face toward the middle of the map.
  *
- * The distance is the one number with a hard constraint on it. The first Ashford Valley draft put its
- * spawns 266 m apart on a map with a 200 m sight range; neither tank could see the other, so the opponent
- * searched for five minutes and fired nothing, and every screenshot looked fine. Two tanks that cannot
- * see each other and will not move toward each other is not a tactical opening, it is a standoff. These
- * are about 230 m apart — outside comfortable spotting, inside the band where the opponent closes to
- * investigate, and with the swell, the village and the line between them.
+ * ## The spawn pair was changed in this correction pass, and the previous reasoning was wrong
  *
- * The player's spawn is in the western fields looking north-east, which frames the level crossing and the
- * village water tower in the initial camera: two landmarks, one of them twelve metres tall, saying "that
- * way" before a single input is read.
+ * The original pair was authored to open *without* line of sight, on the reasoning that two tanks which
+ * cannot see each other is a standoff and not a tactical opening. The owner played it and could not find the
+ * enemy at all. Measuring it (`tools/measure-contact.mjs`, against the real `Battlefield.hasLineOfSight`) shows
+ * the design was far worse than "no line of sight":
+ *
+ *   - the opponent spawned **233 m** away, beyond the 200 m base sight range, so even on open ground with a
+ *     perfect view it could not be spotted;
+ *   - driving *straight at it* did not reveal it anywhere within 200 m. The swell plus the village meant
+ *     there was no direct approach at all.
+ *
+ * So the opening was not a standoff. It was a search with no guarantee of a result, on a 500x500 m map, with
+ * no compass and no marker. Hiding the only opponent at match start is defensible for a game with many of
+ * them; for a prototype containing exactly one it only creates wandering.
+ * The opponent now spawns **visible to the player at 131 m**, 7 degrees off the opening heading, so it is
+ * in the first frame of the opening camera and the player knows where the fight is before reading a single
+ * input. 131 m is comfortably inside the spotting band and marginally outside the opponent's own 130 m
+ * firing limit, so it must close before it can shoot and the player gets time to react rather than taking
+ * an unavoidable opening hit.
+ *
+ * **The position was picked by measurement, and the obvious choice was wrong.** Candidate spawns were run
+ * through the real opponent controller, checking two independent properties at once: can the player see it,
+ * and can it still defeat a player who parks (the ADR-0016 frontal-armour case)? Two candidates that were
+ * perfectly visible - both at the centre of the central swell - scored 0 damage on every seed: visible, and
+ * a fight that never starts. The chosen position scores 900/750/900. Findability and fightability are
+ * independent properties of a spawn, and satisfying one does not satisfy the other.
+ *
+ * `tools/measure-contact.mjs` prints the whole comparison table, and `rural-railway-map.test.ts` asserts the
+ * range, the sight line and the facing, so this cannot silently regress into the state the owner played.
+ * and the line of sight, so this cannot silently regress into the state the owner played.
+ *
+ * The player's spawn is unchanged: the western fields looking north-east frames the level crossing and the
+ * village water tower, and now also frames the opponent - two landmarks saying "that way" before any input.
  */
 export const MARLOWE_CROSSING: BattlefieldData = {
   id: 'marlowe-crossing',
@@ -430,7 +452,7 @@ export const MARLOWE_CROSSING: BattlefieldData = {
      * The base surface is three sine layers at 340, 170 and 95 m. The shortest sets the scale: its own
      * steepest gradient is `1.5 * 2*PI / 95`, about 5.7 degrees, and the worst case where all three
      * combine is around 9. That is **gently rolling country**, and it is a deliberate move away from
-     * 3.5 m on the rejected valley — which was the direct cause of "fighting continuously on a
+     * 3.5 m on the rejected valley Ã¢â‚¬â€ which was the direct cause of "fighting continuously on a
      * mountainside", because that number sets the steepness of the ground *everywhere*, including on the
      * fields the player is meant to accelerate across.
      *
@@ -446,7 +468,7 @@ export const MARLOWE_CROSSING: BattlefieldData = {
      * rise is a smoothstep over the outer 38% of the map's radius, so its steepest gradient sits on a
      * *ring* at about 0.81 of the half-size and is roughly `1.5 * edgeRiseM / (0.38 * halfSizeM)`. At
      * 20 m that ring was about 19 degrees on its own, and because it is a ring it passes within 200 m of
-     * the map's centre — so it compounded with Cairn Height and with the base ridge layers to produce
+     * the map's centre Ã¢â‚¬â€ so it compounded with Cairn Height and with the base ridge layers to produce
      * the map's worst face. At 9 m the ring is about 6.5 degrees: enough to frame the horizon and to
      * stop the world looking like a table, and no longer an obstacle.
      */
@@ -465,10 +487,27 @@ export const MARLOWE_CROSSING: BattlefieldData = {
   structures: STRUCTURES,
   concealment: CONCEALMENT,
   zones: ZONES,
-  // The southern fields, west side, facing north-east toward the crossing and the village.
+  // The southern fields, west side, facing north-east toward the crossing and the village. Unchanged.
   playerSpawn: { x: -125, z: 80, headingRad: 2.2 },
-  // North of the line, east of the village, on open ground with the route back to the crossing available.
-  enemySpawn: { x: 65, z: -55, headingRad: -0.85 },
+  // Moved in this correction pass from (65, -55), which was 233 m away and revealed by no approach. See the
+  // rationale above. Now visible to the player at spawn at 131 m, 7 degrees off the opening heading.
+  //
+  // This position was chosen by measurement, not by eye. `tools/measure-contact.mjs` runs candidate spawns
+  // through the real opponent controller and reports two things at once: whether the player can see it, and
+  // whether it can still defeat a player who parks. Both matter, and the obvious choice failed one of them -
+  //
+  //   (-10, -10)  visible, 146 m  ->  0 damage on all seeds. Dead centre of the central swell.
+  //   (-30, -30)  visible, 145 m  ->  0 damage on all seeds. Also on the swell.
+  //   (-30, -10)  visible, 131 m  ->  900/750/900 damage. Chosen.
+  //
+  // Both failures share a cause worth recording: an opponent sitting on the central swell cannot manoeuvre
+  // against a player at its foot, so it holds at long range and the fight never starts. Findability and
+  // fightability are independent properties of a spawn, and satisfying one does not satisfy the other.
+  //
+  // 131 m is marginally outside the opponent's own 130 m firing band, which is deliberate and desirable: it
+  // must close before it can shoot, so the player has time to react rather than taking an unavoidable opening
+  // hit. The heading faces the player, so the opening presents the strongest frontal armour.
+  enemySpawn: { x: -30, z: -10, headingRad: -0.813 },
 };
 
 /** Every authored map, for tools that want to enumerate them. One map in V6, deliberately. */

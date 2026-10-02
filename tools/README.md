@@ -34,6 +34,38 @@ Options:
 Uses only Node built-ins and a locally installed Chrome or Edge, so it adds **no dependency** to the
 project. A minimal DevTools-protocol client lives in `cdp.mjs`.
 
+## `control-check.mjs`
+
+```
+npm run controls
+```
+
+Serves the built game, opens it, and drives the controls with **real keyboard and mouse events**, then
+reports what actually happened to the player:
+
+- which way the tank moved relative to where its **visible glacis mesh** pointed (W and S);
+- which way the visible nose swung, and how far the camera moved, for A and D at four headings;
+- whether the camera orbits without touching the hull, and whether the hull turns under a stationary camera;
+- whether `C` recentres once and then detaches.
+
+This exists because the automated control tests could not see the bug that made V6 unplayable. They compared
+throttle direction against the simulation's own forward vector, and the simulation was never wrong: the
+*rendered* tank was pointing 180 degrees away from it, and the camera was parented to the hull. A green suite
+proved nothing about what the player sees.
+
+It is evidence, not proof. The caveat at the bottom of this file applies here with more force: nothing in this
+repository can judge feel.
+
+## `measure-contact.mjs`
+
+```
+npm run contact
+```
+
+Prints the range and bearing between the two spawns, whether contact exists at spawn, the shortest drive that
+opens line of sight, and a survey of candidate opponent spawns ranked by how quickly they would be found. This
+is what the V6 spawn pair was measured with, rather than designed on paper.
+
 ## In-page scripts
 
 Passed with `--script`, evaluated in the page against `globalThis.__combatTank`, which exposes the
