@@ -20,6 +20,8 @@
     "sim": "node tools/sim.mjs",
     "routes": "node tools/measure-routes.mjs",
     "contact": "node tools/measure-contact.mjs",
+    "grounding": "node tools/measure-grounding.mjs",
+    "grounding-shots": "node tools/grounding-shots.mjs",
     "shots": "node tools/shots.mjs",
     "controls": "node tools/control-check.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test"

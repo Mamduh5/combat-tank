@@ -174,6 +174,24 @@ export const TANK_DETAIL = {
    * 14 per side establishes the rhythm without the count becoming visible as banding.
    */
   trackLinkCount: 14,
+
+  /**
+   * Number of independently-positioned segments along each track.
+   *
+   * The V6 grounding pass added these so the track can follow the terrain instead of hovering over it. The
+   * count is the trade between fidelity and cost, and the two ends of that trade are both visible:
+   *
+   *  - **Too few** and the track is still effectively a rigid board. The residual over Marlow Crossing's
+   *    rolling ground is a few centimetres between neighbouring samples, so a segment spanning more than
+   *    about 1.6 m starts visibly bridging the dips it is meant to be resting in.
+   *  - **Too many** and the segments read as a caterpillar: each is a discrete box, and at a distance the
+   *    steps between them are more noticeable than the gap the conforming is closing.
+   *
+   * Eight gives 0.79 m segments on this vehicle, which follows the surveyed surfaces closely while still
+   * reading as one continuous band at combat range. Twelve is the point where extra segments stop helping
+   * and start costing, and it also costs a node transform per element per frame.
+   */
+  trackSegmentCount: 8,
   /** Link height as a fraction of track height. Low and wide, so the pattern reads at a glancing angle. */
   trackLinkHeightFraction: 0.3,
   /** Link protrusion from the track face, metres. A silhouette cue, not a texture. */

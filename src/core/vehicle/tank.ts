@@ -1,7 +1,6 @@
 import { NEUTRAL_INPUT, type InputCommand } from '../../shared/input.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
 import {
-  atan,
   clamp,
   cos,
   degToRad,
@@ -12,6 +11,12 @@ import {
   wrapAngle,
   type Vec3,
 } from '../math/index.js';
+import {
+  groundSupportPitchRad,
+  groundSupportRollRad,
+  solveGroundSupportPlane,
+  type GroundSupportPlane,
+} from './ground-support.js';
 import type { Terrain } from '../world/terrain.js';
 import { LongitudinalModel, moveToward } from './locomotion.js';
 import {
@@ -73,6 +78,26 @@ export type { TurretState } from './turret.js';
  * being "in a restricted zone" rather than simply running out of ground.
  */
 const PLAY_AREA_TAPER_M = 14;
+
+/**
+ * Half the vehicle's length used as the forward extent of the ground-support grid, as a fraction of the
+ * definition's length.
+ *
+ * Slightly under half, because the tracks do not occupy the full hull length: `TANK_PROPORTIONS` puts the
+ * track run at 0.94 of the hull, and the nose and tail of the hull overhang it. Sampling the full hull
+ * length would let those overhangs — which never touch the ground — pull the fitted plane around and tilt
+ * a vehicle whose running gear is sitting level.
+ */
+const GROUND_SUPPORT_HALF_LENGTH_FRACTION = 0.5 * 0.94;
+
+/**
+ * Half the vehicle's width used as the lateral extent of the ground-support grid, as a fraction of the
+ * definition's width.
+ *
+ * The full width, because the tracks do span it: the outer face of each track unit reaches the vehicle's
+ * full width, and the ground under those outer faces is what the player sees meeting the tank.
+ */
+const GROUND_SUPPORT_HALF_WIDTH_FRACTION = 0.5;
 
 /**
  * A single tank: hull, kinematic locomotion, turret, gun, and damage state.
@@ -137,8 +162,38 @@ export class Tank {
    */
   private playAreaHalfSizeM = Number.POSITIVE_INFINITY;
 
+  /**
+   * The terrain this vehicle was last stepped against.
+   *
+   * Held rather than passed into `updateBodyOrientation` because that method already runs inside `step`,
+   * which is handed the terrain. `Terrain` is supplied per call by the simulation rather than injected at
+   * construction, so caching it here is the only way the presentation code can reach the ground without
+   * threading a second parameter through the step signature. It is refreshed every tick, so it can never
+   * be stale relative to the vehicle's own position.
+   */
+  private terrain: Terrain;
+
+  /**
+   * The ground plane fitted beneath the vehicle on the most recent step, in the vehicle's own frame.
+   *
+   * Exposed read-only because the renderer needs it to conform the track elements to the ground: the hull
+   * presents the plane's average, and the per-track and per-wheel offsets are the plane's residuals. The
+   * core fits it and the renderer draws it, which keeps the geometry in one place and the policy in
+   * another.
+   */
+  private supportPlane: GroundSupportPlane = {
+    risePerMetreForward: 0,
+    risePerMetreRight: 0,
+    centreHeightM: 0,
+    maxResidualAboveM: 0,
+    maxResidualBelowM: 0,
+  };
+
   constructor(definition: VehicleDefinition, init: VehicleInit) {
     this.definition = definition;
+    // Replaced on the first `step`, which every caller makes before reading anything. Seeded with a
+    // sampler that reports flat ground so construction stays total and cannot throw on a null.
+    this.terrain = { heightAt: () => 0 } as unknown as Terrain;
     this.longitudinal = new LongitudinalModel(definition);
     this.turretState = createTurretState();
     this.gunState = createMainGunState();
@@ -258,6 +313,23 @@ export class Tank {
   }
 
   /**
+   * The ground plane fitted beneath the vehicle, for the renderer to conform the running gear to.
+   *
+   * Read-only by contract: the core owns the fit, and the renderer only reads it. Exposing the plane
+   * rather than the raw samples is deliberate — the renderer needs the *residual* of each element against
+   * this plane, and handing it nine raw heights would invite it to re-fit a second, slightly different
+   * plane and draw a hull that disagrees with the attitude the core chose.
+   */
+  get groundSupport(): GroundSupportPlane {
+    return this.supportPlane;
+  }
+
+  /** The terrain this vehicle was last stepped against, so the renderer can sample under its own geometry. */
+  get ground(): Terrain {
+    return this.terrain;
+  }
+
+  /**
    * Takes the shot requested this tick, if any, and clears it.
    *
    * Returns `null` when no shot was accepted. The simulation world calls this exactly once per
@@ -279,6 +351,9 @@ export class Tank {
   step(input: InputCommand, terrain: Terrain, dtSeconds: number): void {
     const { traversal, ground, dimensions, powertrain } = this.definition;
     const state = this.state;
+
+    // Cached for the presentation code, which needs the ground but is not part of the step signature.
+    this.terrain = terrain;
 
     // --- 0. Damage consequences ----------------------------------------------------------
     // Read before anything else, because a destroyed vehicle must not drive or shoot. The input is
@@ -412,11 +487,11 @@ export class Tank {
     state.position = vec3(nextX, groundHeight + state.rideHeightM, nextZ);
 
     // --- 6. Body orientation for presentation ----------------------------------------
-    // Visual only. It does not feed back into movement, so a smoothing choice here can never
-    // change where the vehicle actually goes.
-    const normal = terrain.normalAt(nextX, nextZ);
-    state.groundNormal = normal;
-    this.updateBodyOrientation(normal, dtSeconds);
+    // Visual only. It does not feed back into movement, so a smoothing choice here can never change
+    // where the vehicle actually goes. The normal is still recorded on the state for anything that wants
+    // the surface direction; the attitude itself is fitted from the support area rather than from it.
+    state.groundNormal = terrain.normalAt(nextX, nextZ);
+    this.updateBodyOrientation(dtSeconds);
 
     // --- 7. Turret, gun, and the reload cycle -----------------------------------------
     // Runs *after* the hull has been updated, so the turret is mounted on the heading the vehicle
@@ -555,19 +630,35 @@ export class Tank {
   /**
    * Updates the smoothed pitch and roll used to present the hull on a slope.
    *
-   * The ground normal is decomposed in the hull's own frame: the component along the heading gives
-   * pitch, the component along the right axis gives roll.
+   * Replaced in the V6 grounding pass. This used to decompose a **single** ground normal taken at the
+   * vehicle's centre, and measurement showed that was wrong twice over: the sign of each axis was
+   * inverted relative to Babylon's rotation composition, and one central sample cannot describe a
+   * 6.7 m x 3.3 m footprint on rolling ground. It now fits a plane to a grid of contact samples spanning
+   * the track area and derives both angles from that plane's gradients. See `ground-support.ts` for the
+   * fit and the derivation of the signs.
+   *
+   * Still presentation only. Nothing here feeds back into movement, so the smoothing choice cannot change
+   * where the vehicle actually goes.
    */
-  private updateBodyOrientation(groundNormal: Vec3, dtSeconds: number): void {
+  private updateBodyOrientation(dtSeconds: number): void {
     const state = this.state;
-    const forwardX = sin(state.headingRad);
-    const forwardZ = cos(state.headingRad);
+    const { lengthM, widthM } = this.definition.dimensions;
 
-    const forwardComponent = groundNormal.x * forwardX + groundNormal.z * forwardZ;
-    const rightComponent = groundNormal.x * forwardZ - groundNormal.z * forwardX;
+    // The support grid spans the **track** area rather than the full hull, because the tracks are what
+    // meets the ground. Using the hull length would let the overhanging glacis and the rear overhang pull
+    // the fitted plane around and tilt a vehicle that is sitting perfectly level on its running gear.
+    const plane = solveGroundSupportPlane(
+      (px, pz) => this.terrain.heightAt(px, pz),
+      state.position.x,
+      state.position.z,
+      state.headingRad,
+      lengthM * GROUND_SUPPORT_HALF_LENGTH_FRACTION,
+      widthM * GROUND_SUPPORT_HALF_WIDTH_FRACTION,
+    );
+    this.supportPlane = plane;
 
-    const targetPitch = -atan(forwardComponent);
-    const targetRoll = atan(rightComponent);
+    const targetPitch = groundSupportPitchRad(plane);
+    const targetRoll = groundSupportRollRad(plane);
 
     // A blend of the definition's stiffness and damping, so the same two numbers govern both ride
     // height and attitude and cannot drift apart.

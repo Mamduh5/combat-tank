@@ -99,7 +99,11 @@ async function bootstrap(): Promise<void> {
   // Environment art, built from the same map data the simulation uses. See `battlefield-props.ts` for
   // why the renderer takes the map rather than keeping its own list of things to draw.
   const props = buildBattlefieldProps(scene, simulation.battlefield);
-  const tankVisual = new TankVisual(scene, simulation.vehicle.definition, 'player');
+  // The terrain sampler is injected so the running gear can conform to the ground beneath it. The model
+  // itself takes a definition and knows nothing about the battlefield, which is what lets one builder serve
+  // both vehicles; the map is supplied here, where the map is actually known.
+  const groundAt = (x: number, z: number) => simulation.terrain.heightAt(x, z);
+  const tankVisual = new TankVisual(scene, simulation.vehicle.definition, 'player', undefined, groundAt);
   const orbitCamera = new OrbitCamera(camera, physics);
   const effects = new ShellEffects(scene);
 
@@ -116,7 +120,7 @@ async function bootstrap(): Promise<void> {
   const targetVisual =
     simulation.target === null
       ? null
-      : new TankVisual(scene, simulation.target.definition, 'opponent');
+      : new TankVisual(scene, simulation.target.definition, 'opponent', undefined, groundAt);
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
@@ -273,9 +277,12 @@ async function bootstrap(): Promise<void> {
     shotsFiredLastFrame = simulation.telemetry.shotsFired;
 
     // 5. Copy simulation state onto the view. The renderer only ever reads.
-    tankVisual.apply(state, simulation.vehicle.turretState);
+    //
+    // The frame delta is handed over because the track conforming eases toward the ground at a fixed rate
+    // per second rather than a fixed fraction per frame, so it behaves identically at 30 Hz and 144 Hz.
+    tankVisual.apply(state, simulation.vehicle.turretState, deltaSeconds);
     if (targetVisual !== null && simulation.target !== null) {
-      targetVisual.apply(simulation.target.state, simulation.target.turretState);
+      targetVisual.apply(simulation.target.state, simulation.target.turretState, deltaSeconds);
       // A destroyed target is visibly a wreck, so the outcome is legible without reading the panel.
       targetVisual.setDestroyed(simulation.target.damage.destroyed);
     }

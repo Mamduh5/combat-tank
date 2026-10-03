@@ -56,6 +56,49 @@ proved nothing about what the player sees.
 It is evidence, not proof. The caveat at the bottom of this file applies here with more force: nothing in this
 repository can judge feel.
 
+## `measure-grounding.mjs`
+
+```
+npm run grounding
+```
+
+Measures the **rendered** tank's clearance above the terrain, at seven stations along each track, on thirteen
+poses covering every surface the V6 brief names: flat, slope, rolling, crest, depression, road-to-field,
+railway crossing, embankment, and three climbs.
+
+This is how the uneven-ground float was diagnosed and how it is now gated. The report prints three numbers
+per pose that matter:
+
+- `max daylight under track` — the owner's bug. Above ~0.12 m it reads as a visible dark line.
+- `deepest bite` — how far the track is buried. Reported separately because the obvious fix for daylight is
+  to lower the vehicle until it clips, and that fix must be able to fail.
+- `floating` — the share of the run with a gap large enough to read as floating, which distinguishes "one end
+  lifts on a crest" from "most of the run is off the ground".
+
+It also prints a **sign test** per axis: the terrain's own front-to-rear and left-to-right height difference
+against the rendered hull's. This is the check that catches an inverted attitude, which no aggregate gap
+number can — a body pitched the wrong way still looks plausible on gentle ground, and only becomes obvious
+once the gradient is steep enough. Before the fix it failed on 12 of 13 poses.
+
+## `grounding-shots.mjs`
+
+```
+npm run grounding-shots -- shots/grounding
+```
+
+Serves the built game, drives headless Chrome, and captures the same thirteen surfaces from a **low side
+viewpoint** near wheel height, plus three driving sequences. Every capture reports its own measured gap, so
+the index is a numeric record as well as a set of pictures.
+
+Low and to the side is not a stylistic choice: a layout view from 200 m makes a 20 cm gap a fraction of a
+pixel, and a view from behind hides the near track behind the far one, so a vehicle resting on one corner still
+looks level. Only a low side view makes the contact line readable.
+
+The driving sequences exist because the conforming's failure modes are both invisible in a still — a track
+that snaps or that vibrates looks correct in every static frame and wrong in motion. Each drive reports the
+worst gap over the run, the largest frame-to-frame change in it (the jitter figure), how far the vehicle
+actually travelled, and a `moved` flag, so a drive that failed to move cannot be misread as a clean run.
+
 ## `measure-contact.mjs`
 
 ```

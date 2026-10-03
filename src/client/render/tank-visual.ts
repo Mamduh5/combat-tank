@@ -1,4 +1,4 @@
-import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
+﻿import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
@@ -29,15 +29,48 @@ const DESTROYED_TINT = new Color3(0.13, 0.13, 0.15);
 const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
 
 /**
+ * How quickly a track segment closes on the ground beneath it, per second.
+ *
+ * Faster than the hull's ride height settles, deliberately. The hull is a heavy body and should look like
+ * it has mass; the track is a lighter assembly and should look like it is already in contact. Making the
+ * two rates equal is what produces the "settling into place" look that reads as a vehicle bouncing.
+ */
+const CONFORM_RATE_PER_SECOND = 22;
+
+/**
+ * Maximum vertical travel of a track segment from its authored height, metres.
+ *
+ * Just over the largest ground residual measured on Marlowe Crossing, so on real ground the limit never
+ * binds and exists only to stop a spike beyond the surveyed surfaces from tearing a segment away from the
+ * fender above it. A real suspension has finite travel for the same reason.
+ */
+const CONFORM_TRAVEL_M = 0.55;
+
+/**
+ * Eases a value toward its target at a fixed rate, independent of frame rate.
+ *
+ * `1 - exp(-rate * dt)` rather than a fixed fraction per frame, so the conforming looks the same at 30 Hz
+ * and at 144 Hz. A per-frame constant would make the track snap instantly on a fast machine and crawl on a
+ * slow one, which is the same class of bug as using a per-frame lerp for the simulation's own ride height.
+ */
+function segmentEasingFactor(ratePerSecond: number, deltaSeconds: number): number {
+  return 1 - Math.exp(-ratePerSecond * Math.max(0, deltaSeconds));
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return value < low ? low : value > high ? high : value;
+}
+
+/**
  * The V4 prototype tank model: a low/mid-poly vehicle assembled procedurally.
  *
- * ## Asset provenance â€” created in-project, no external files
+ * ## Asset provenance Ã¢â‚¬â€ created in-project, no external files
  *
  * Every mesh here is generated in code from the vehicle definition's own dimensions. Nothing is
  * imported, downloaded, or licensed. That was a deliberate choice for the first real-asset version:
  * sourcing a model would have introduced redistribution questions and a licence to track, and the
  * point of this version is to establish *that* the game looks like it contains tanks. When production
- * art replaces this, it will be loaded by `visualId` and nothing in the simulation changes â€” that is
+ * art replaces this, it will be loaded by `visualId` and nothing in the simulation changes Ã¢â‚¬â€ that is
  * the property ADR-0003 promised, and this file is where it gets exercised.
  *
  * ## What makes it read as a tank
@@ -49,7 +82,7 @@ const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
  *  - **A sloped upper glacis and a vertical lower plate**, so the hull front has a *shape* rather than
  *    being a flat face. This is the single strongest silhouette cue for "this is the front".
  *  - **A tapered, faceted turret with a cast mantlet**, giving the turret a distinct top outline
- *    instead of a cube, plus a rear bustle that overhangs â€” which is what makes a turret look like a
+ *    instead of a cube, plus a rear bustle that overhangs Ã¢â‚¬â€ which is what makes a turret look like a
  *    turret rather than a lid.
  *  - **Track links**, visible as a repeated pattern along each track's outer face, so the running gear
  *    reads as *tracked* rather than as a dark skirt. Wheels alone were not enough at range.
@@ -62,14 +95,14 @@ const DESTROYED_GLOW = new Color3(0.1, 0.02, 0.01);
  *
  * The opponent uses a different **silhouette**, not just a different colour: a longer, lower hull and a
  * rounded, cast-looking turret against the player's slab-sided turret and shorter hull. Colour alone
- * was the V3R approach and it is not enough â€” at range, in fog, or for a colour-blind player, two tanks
+ * was the V3R approach and it is not enough Ã¢â‚¬â€ at range, in fog, or for a colour-blind player, two tanks
  * of different colours in the same shape are genuinely hard to tell apart. A shape difference is
  * legible at any distance and in any lighting.
  *
  * ## Hierarchy
  *
- * The turret and barrel are **separate transform nodes**, mirroring the simulation's structure â€” hull,
- * then turret, then barrel â€” so rotating the hull carries the turret automatically and the two can
+ * The turret and barrel are **separate transform nodes**, mirroring the simulation's structure Ã¢â‚¬â€ hull,
+ * then turret, then barrel Ã¢â‚¬â€ so rotating the hull carries the turret automatically and the two can
  * never disagree about which way the gun is pointing.
  */
 
@@ -153,6 +186,57 @@ export class TankVisual {
    */
   private contactOffsetM = 0;
 
+  /**
+   * The track units, as ordered segments that can be moved to the ground individually.
+   *
+   * One entry per side, each holding that side's segment nodes in tail-to-nose order. The nodes carry the
+   * track slab, its links, the fender above it and whichever road wheels and rollers fall within their span,
+   * so moving a node moves that whole piece of running gear onto the terrain beneath it.
+   */
+  private readonly trackSegments: {
+    readonly side: -1 | 1;
+    /** Longitudinal length of one segment, metres. */
+    readonly span: number;
+    readonly nodes: TransformNode[];
+  }[] = [];
+
+  /**
+   * Smoothed vertical offset currently applied to each segment node, metres.
+   *
+   * Parallel to `trackSegments`, flattened. Kept between frames so the conforming can be eased rather than
+   * snapped: the ground under a segment can change by tens of centimetres between two frames at speed, and
+   * a track that teleports to meet it reads as a glitch rather than as a vehicle following the ground.
+   */
+  private readonly segmentOffsetsM: number[] = [];
+
+  /**
+   * Each segment node's authored height, captured at construction, in root-local metres.
+   *
+   * The conforming pass offsets from these rather than from the node's live position, so offsets cannot
+   * accumulate frame over frame into a drift. Paired index-for-index with `segmentOffsetsM`.
+   */
+  private baseSegmentY: number[] = [];
+
+  /**
+   * Terrain height sampler, or null when this visual has no ground to conform to.
+   *
+   * Injected rather than imported: the model is built from a `VehicleDefinition` and knows nothing about
+   * the battlefield, which is what lets the same builder serve both vehicles and any future map. A null
+   * sampler leaves the vehicle in its rigid authored pose, so construction and any headless use stay total.
+   */
+  private groundAt: ((x: number, z: number) => number) | null = null;
+
+  /** Lateral offset of each track unit's centreline from the vehicle centreline, metres. */
+  private trackCentreXM = 0;
+
+  /**
+   * Half the track slab's height, metres: the distance from a segment node's centre down to the contact line.
+   *
+   * Recorded at construction because the conforming pass measures its residual against the track's *lower
+   * edge* while the nodes it moves are positioned at the slab's centre.
+   */
+  private trackHalfHeightM = 0;
+
   /** Root node. Position and rotation are set from simulation state each frame. */
   readonly root: TransformNode;
 
@@ -180,9 +264,18 @@ export class TankVisual {
     definition: VehicleDefinition,
     variant: TankVariant = 'player',
     accent?: Color3,
+    /**
+     * Terrain height sampler used to conform the running gear to the ground.
+     *
+     * Optional so the model can still be built without a battlefield â€” for a unit test, or a preview. When
+     * absent the vehicle keeps its rigid authored pose, which is the old behaviour and is correct for a
+     * vehicle being inspected in isolation.
+     */
+    groundAt?: (x: number, z: number) => number,
   ) {
     const spec = VARIANT_SPECS[variant];
     const palette = spec.palette;
+    this.groundAt = groundAt ?? null;
     const { widthM, heightM } = definition.dimensions;
     const lengthM = definition.dimensions.lengthM * spec.hullLengthScale;
 
@@ -236,16 +329,61 @@ export class TankVisual {
     const trackSpan = lengthM * TANK_PROPORTIONS.trackLengthFraction;
     const trackWidthM = widthM * TANK_PROPORTIONS.trackWidthFraction;
     const trackCentreX = widthM * (0.5 - trackWidthM / widthM / 2);
+    // Recorded on the instance because the conforming pass runs long after construction and needs to know
+    // where each track unit sits laterally, and how deep its slab is.
+    this.trackCentreXM = trackCentreX;
+    this.trackHalfHeightM = trackHeightM / 2;
 
     for (const side of [-1, 1] as const) {
-      const track = MeshBuilder.CreateBox(
-        `tank-track-${side}`,
-        { width: trackWidthM, height: trackHeightM, depth: trackSpan },
-        scene,
-      );
-      track.position.set(side * trackCentreX, trackHeightM / 2, 0);
-      track.material = makeMaterial(scene, `tank-track-mat-${side}`, palette.track);
-      track.parent = this.root;
+      // The track is built as **segments** rather than one rigid box, and each is parented to its own node
+      // so it can be moved to the ground beneath it every frame.
+      //
+      // This is the part that makes the vehicle sit on the terrain rather than over it. A single rigid box
+      // can only ever touch a curved surface along one line, so on anything but flat ground it either
+      // bridges a dip or buries itself in a rise; measured, that was up to 1.39 m of daylight under the
+      // tail on the Cairn approach. Segments let the track follow the ground along its whole run, which is
+      // the difference between "a rigid board hovering over the landscape" and "a vehicle resting on it".
+      //
+      // Each segment is a `TransformNode` carrying a slab of track, so the visual track is still only a
+      // handful of draw calls rather than one per link.
+      const segmentCount = TANK_DETAIL.trackSegmentCount;
+      const segmentSpan = trackSpan / segmentCount;
+      this.trackSegments.push({ side, span: segmentSpan, nodes: [] });
+
+      for (let i = 0; i < segmentCount; i += 1) {
+        const segmentZ = -trackSpan / 2 + segmentSpan * (i + 0.5);
+        const node = new TransformNode(`tank-track-node-${side}-${i}`, scene);
+        node.position.set(side * trackCentreX, trackHeightM / 2, segmentZ);
+        node.parent = this.root;
+
+        const slab = MeshBuilder.CreateBox(
+          `tank-track-${side}-${i}`,
+          // A touch of overlap between neighbours, so a conforming segment that moves down over a dip
+          // cannot open a visible seam along the top of the track. Overlapping is invisible; a gap is not.
+          { width: trackWidthM, height: trackHeightM, depth: segmentSpan * 1.04 },
+          scene,
+        );
+        slab.position.set(0, 0, 0);
+        slab.material = makeMaterial(scene, `tank-track-mat-${side}-${i}`, palette.track);
+        slab.parent = node;
+
+        this.trackSegments[this.trackSegments.length - 1]!.nodes.push(node);
+      }
+
+      // Which track segment a part at longitudinal position `z` belongs to, so it rides with the track
+      // rather than being left behind on the hull. A part keeps the *local* offset it had within the
+      // rigid model, so nothing shifts along the track â€” only up and down, with its segment.
+      const segments = this.trackSegments[this.trackSegments.length - 1]!;
+      const localZIn = (z: number) => z + trackSpan / 2;
+      const nodeFor = (z: number) => {
+        const index = Math.min(
+          segmentCount - 1,
+          Math.max(0, Math.floor(localZIn(z) / segmentSpan)),
+        );
+        const node = segments.nodes[index]!;
+        // Where the part sits relative to its segment node, so re-parenting does not move it.
+        return { node, offsetZ: z - (node.position.z as number) };
+      };
 
       // Drive sprocket (rear) and idler (front), larger than the road wheels.
       //
@@ -262,12 +400,17 @@ export class TankVisual {
           scene,
         );
         end.rotation.z = Math.PI / 2;
-        end.position.set(side * trackCentreX, trackHeightM * 0.55, z);
+        const host = nodeFor(z);
+        end.position.set(0, trackHeightM * 0.05, host.offsetZ);
         end.material = makeMaterial(scene, `tank-${name}-mat-${side}`, palette.wheel);
-        end.parent = this.root;
+        end.parent = host.node;
       }
 
       // Road wheels, proud of the track face so they catch light and read individually.
+      //
+      // Each wheel rides its own track segment, which is the visual suspension: over a crest the middle
+      // wheels drop with the dip under them while the end wheels stay up on the rise, so the vehicle
+      // articulates instead of presenting one rigid line to the ground.
       const wheelCount = TANK_PROPORTIONS.roadWheelCount;
       for (let i = 0; i < wheelCount; i += 1) {
         const wheel = MeshBuilder.CreateCylinder(
@@ -278,13 +421,16 @@ export class TankVisual {
         // Cylinders are built along Y; lay them along X to face outward from the hull's side.
         wheel.rotation.z = Math.PI / 2;
         const offset = wheelCount <= 1 ? 0 : -trackSpan / 2 + (trackSpan / (wheelCount - 1)) * i;
+        const host = nodeFor(offset);
+        // `trackHeightM * 0.5` is the segment node's own height, so this preserves the original wheel
+        // height above the track slab.
         wheel.position.set(
-          side * (trackCentreX + trackWidthM * 0.5 + 0.03),
-          wheelRadiusM + 0.06,
-          offset,
+          side * (trackWidthM * 0.5 + 0.03),
+          wheelRadiusM + 0.06 - trackHeightM * 0.5,
+          host.offsetZ,
         );
         wheel.material = makeMaterial(scene, `tank-wheel-mat-${side}-${i}`, palette.wheel);
-        wheel.parent = this.root;
+        wheel.parent = host.node;
       }
 
       // Return rollers, high on the track face. Their absence is why a run of road wheels alone still
@@ -298,13 +444,15 @@ export class TankVisual {
           scene,
         );
         roller.rotation.z = Math.PI / 2;
+        const z = -trackSpan / 2 + trackSpan * f;
+        const host = nodeFor(z);
         roller.position.set(
-          side * (trackCentreX + trackWidthM * 0.5 + 0.02),
-          trackHeightM - rollerRadiusM,
-          -trackSpan / 2 + trackSpan * f,
+          side * (trackWidthM * 0.5 + 0.02),
+          trackHeightM - rollerRadiusM - trackHeightM * 0.5,
+          host.offsetZ,
         );
         roller.material = makeMaterial(scene, `tank-roller-mat-${side}-${i}`, palette.wheel.scale(0.9));
-        roller.parent = this.root;
+        roller.parent = host.node;
       }
 
       // Track links along the outer face.
@@ -313,47 +461,57 @@ export class TankVisual {
       // slab, and at range the eye reads a *skirt*; a repeated link pattern is what reads as a track.
       // One mesh with all the links baked into it rather than one mesh per link, so a full vehicle adds
       // two draw calls rather than thirty.
+      //
+      // The links are parented to the **segments** rather than to the hull, so they follow the track down
+      // into a dip. Links left on the hull would be the one part of the running gear still hovering over
+      // the ground the track is resting on, which is exactly the artefact this pass exists to remove.
       const linkCount = TANK_DETAIL.trackLinkCount;
       const linkHeightM = trackHeightM * TANK_DETAIL.trackLinkHeightFraction;
       const linkSpacing = trackSpan / linkCount;
-      const linkBoxes: number[] = [];
       for (let i = 0; i < linkCount; i += 1) {
         const z = -trackSpan / 2 + linkSpacing * (i + 0.5);
+        const host = nodeFor(z);
         // Push alternating links slightly further out, giving the track a visible rhythm rather than a
         // perfectly flat banded strip.
         const out = TANK_DETAIL.trackLinkDepthM * (i % 2 === 0 ? 1 : 0.55);
-        linkBoxes.push(
-          side * (trackCentreX + trackWidthM * 0.5 + out),
-          trackHeightM * 0.5,
-          z,
-          TANK_DETAIL.trackLinkDepthM,
-          linkHeightM,
-          linkSpacing * 0.72,
+        const link = MeshBuilder.CreateBox(
+          `tank-link-${side}-${i}`,
+          {
+            width: TANK_DETAIL.trackLinkDepthM,
+            height: linkHeightM,
+            depth: linkSpacing * 0.72,
+          },
+          scene,
         );
+        link.position.set(
+          side * (trackWidthM * 0.5 + out),
+          0,
+          host.offsetZ,
+        );
+        link.material = makeMaterial(scene, `tank-link-mat-${side}-${i}`, palette.track.scale(1.5));
+        link.parent = host.node;
       }
-      const links = MeshBuilder.CreateBox(
-        `tank-links-${side}`,
-        { width: 1, height: 1, depth: 1 },
-        scene,
-      );
-      applyBoxInstances(links, linkBoxes);
-      links.material = makeMaterial(scene, `tank-links-mat-${side}`, palette.track.scale(1.5));
-      links.parent = this.root;
 
       // Fender over the top of the track: catches light along the vehicle's top edge and breaks the
       // long unbroken flank.
-      const fender = MeshBuilder.CreateBox(
-        `tank-fender-${side}`,
-        {
-          width: trackWidthM + widthM * TANK_DETAIL.fenderOverhangFraction * 2,
-          height: trackHeightM * TANK_DETAIL.fenderThicknessFraction,
-          depth: trackSpan * 0.98,
-        },
-        scene,
-      );
-      fender.position.set(side * trackCentreX, trackHeightM + 0.02, 0);
-      fender.material = makeMaterial(scene, `tank-fender-mat-${side}`, palette.fender);
-      fender.parent = this.root;
+      //
+      // One fender per segment, so the shelf over the tracks follows them. A single rigid fender spanning
+      // the whole run would float clear of a dipping middle and intersect a rising end.
+      for (let i = 0; i < segmentCount; i += 1) {
+        const node = segments.nodes[i]!;
+        const fender = MeshBuilder.CreateBox(
+          `tank-fender-${side}-${i}`,
+          {
+            width: trackWidthM + widthM * TANK_DETAIL.fenderOverhangFraction * 2,
+            height: trackHeightM * TANK_DETAIL.fenderThicknessFraction,
+            depth: segmentSpan * 1.04,
+          },
+          scene,
+        );
+        fender.position.set(0, trackHeightM * 0.5 + 0.02, 0);
+        fender.material = makeMaterial(scene, `tank-fender-mat-${side}-${i}`, palette.fender);
+        fender.parent = node;
+      }
     }
 
     // --- Turret -------------------------------------------------------------------------
@@ -479,6 +637,7 @@ export class TankVisual {
     // Measure the ground-contact offset now that every track mesh exists, with the root still
     // at the origin so the reading is in root-local space.
     this.contactOffsetM = this.measureContactOffset();
+    this.baseSegmentY = this.measureSegmentBaseY();
   }
 
   /**
@@ -492,18 +651,26 @@ export class TankVisual {
    * makes the independence visible: the hull follows its own heading, the turret its own local angle,
    * and the barrel its own elevation. Nothing here derives one from another.
    */
-  apply(state: VehicleState, turret: TurretVisualState): void {
-    // Drop the visual by however far its own geometry sits above the root origin, so the tracks rest on
-    // the ground instead of hovering above it.
+  apply(state: VehicleState, turret: TurretVisualState, deltaSeconds = 1 / 60): void {
+    // ## Where the hull sits, and why this is not `position.y`
     //
-    // Measured in the running game, this was an 0.86 m float. The simulation places the vehicle origin
-    // at ground + `groundClearanceM` (0.48 m), but the mesh is modelled around the hull rather than
-    // around the track contact, so the track bottoms sat a further 0.38 m above that. Nothing in the
-    // core was wrong â€” a vehicle origin a little above the ground is a sensible place for one â€” and the
-    // mismatch was purely in how the renderer read it.
+    // The simulation places the vehicle origin at `groundHeight + rideHeightM`, and `rideHeightM`
+    // converges on the definition's `groundClearanceM` of 0.48 m. That is a sensible place for a vehicle
+    // *origin* — it is the hull floor, and a hull floor does float above the ground. But this model's origin
+    // is at the **track contact line**: the track slab is centred at `trackHeightM / 2` and its lower edge
+    // therefore sits at local y = 0. So drawing the model at `position.y` puts the track bottoms 0.48 m in
+    // the air, and that is the flat-ground float the last pass tried to correct with a contact offset.
+    //
+    // The offset it measured was zero — correctly, because the geometry really does reach local y = 0 —
+    // so subtracting it changed nothing. The error was never in the model's shape; it was in reading a
+    // hull-floor origin as though it were a contact-line origin.
+    //
+    // So the visual is placed at the ground, and the ride height is dropped. `contactOffsetM` still
+    // subtracts, and is still measured rather than hard-coded, because a model authored with its origin
+    // above the contact line would need it and a future one might.
     this.root.position.set(
       state.position.x,
-      state.position.y - this.contactOffsetM,
+      state.position.y - state.rideHeightM - this.contactOffsetM,
       state.position.z,
     );
 
@@ -527,14 +694,20 @@ export class TankVisual {
     // why this pass verifies the rendered model rather than the vector again.
     //
     // Positive heading makes the model's local axes coincide with the simulation's own basis: local +Z
-    // becomes forward, and local +X becomes `(cos h, -sin h)`, the simulation's right axis. That is also
-    // why the pitch and roll need no sign change - they were computed in that basis all along and were
-    // only ever being displayed in a mirrored frame.
+    // becomes forward, and local +X becomes `(cos h, -sin h)`, the simulation's right axis.
     this.root.rotation.set(
       state.bodyPitchRad,
       hullVisualYawRad(state.headingRad),
       state.bodyRollRad,
     );
+
+    // ## Why the track is conformed *after* the root is posed
+    //
+    // Order matters and is not incidental. The conforming pass measures where the hull's bottom plane sits
+    // at each station, which it can only know once the root's pitch, roll and position are final. Running
+    // it first would offset the segments against last frame's attitude and leave a visible lag between the
+    // hull's tilt and the track's contact â€” the vehicle would look like it were steering before it leaned.
+    this.conformTracksToGround(state, deltaSeconds);
 
     // The turret's *local* angle, positively, for the same reason it was previously negated. Because it
     // is a child of the hull, the hull's rotation is inherited automatically, so rotating the hull
@@ -550,7 +723,7 @@ export class TankVisual {
   /**
    * Tints the vehicle to show it has been destroyed.
    *
-   * Deliberately crude â€” a dark, cold body. The owner asked for the state to be *visibly
+   * Deliberately crude Ã¢â‚¬â€ a dark, cold body. The owner asked for the state to be *visibly
    * distinguishable* and explicitly not for destruction effects, so this is a colour swap rather than
    * smoke, fire, or a wreck model.
    *
@@ -603,7 +776,7 @@ export class TankVisual {
   private measureContactOffset(): number {
     let lowest = Infinity;
     for (const mesh of this.root.getChildMeshes()) {
-      if (!mesh.name.startsWith('tank-track')) {
+      if (!mesh.name.startsWith('tank-track-')) {
         continue;
       }
       const bounds = mesh.getBoundingInfo().boundingBox;
@@ -616,11 +789,146 @@ export class TankVisual {
     return Number.isFinite(lowest) ? lowest : 0;
   }
 
+  /**
+   * The resting height of every track segment node, in root-local space, before any conforming.
+   *
+   * Measured rather than remembered. The conforming pass needs to know where each segment *would* sit if
+   * the vehicle were perfectly rigid, so that it can be moved by the difference between that and the
+   * ground. Storing the authored position means a change to a proportion in `tank-proportions.ts` cannot
+   * silently invalidate the conforming, which is the same reasoning behind `measureContactOffset`.
+   */
+  private measureSegmentBaseY(): number[] {
+    const base: number[] = [];
+    for (const segments of this.trackSegments) {
+      for (const node of segments.nodes) {
+        base.push(node.position.y as number);
+      }
+    }
+    return base;
+  }
+
+  /**
+   * Moves each track segment to the ground beneath it.
+   *
+   * ## What this is for
+   *
+   * The hull presents the fitted support plane, which is the *average* of the ground under the vehicle.
+   * That is the right attitude and the wrong shape: a plane through a rolling landscape is a chord, so it
+   * floats over every dip and buries itself in every rise. Measured across Marlowe Crossing, the residual
+   * was up to 0.52 m of daylight even after the attitude was corrected, and it was this residual â€” not the
+   * attitude â€” that produced the owner's report of a vehicle "most of which floats" on non-flat ground.
+   *
+   * So each segment is offset vertically by the local difference between the ground beneath it and the
+   * hull's own bottom plane. The hull stays rigid, which is correct: real tanks have a rigid hull. Only the
+   * running gear conforms, which is also correct: real tracks do.
+   *
+   * ## Why it is smoothed, and why it is clamped
+   *
+   * **Smoothed** because the target changes by tens of centimetres between frames at driving speed, and a
+   * track that jumps to meet the ground reads as a rendering fault rather than as contact. The easing is
+   * derived from the elapsed time so the behaviour is identical at 30 Hz and at 144 Hz â€” the same rule the
+   * core follows for ride height.
+   *
+   * **Clamped** because a real suspension has finite travel. Without a limit, a sharp crest would drag a
+   * segment far enough up to detach it visually from the fender above it. The travel is a little over the
+   * largest residual measured on the map, so on real ground it never binds and only a spike beyond the
+   * survey would be limited.
+   *
+   * ## What it deliberately does not do
+   *
+   * It does not change `state.position`, the hull's pitch or roll, or anything the simulation reads. The
+   * renderer reads simulation state and never writes it (ADR-0001); this is presentation only.
+   */
+  private conformTracksToGround(state: VehicleState, deltaSeconds: number): void {
+    const terrain = this.groundAt;
+    if (terrain === null) {
+      return;
+    }
+
+    const forwardX = Math.sin(state.headingRad);
+    const forwardZ = Math.cos(state.headingRad);
+    const rightX = Math.cos(state.headingRad);
+    const rightZ = -Math.sin(state.headingRad);
+
+    // How fast a segment is allowed to close on the ground. Fast enough to keep up with the terrain at
+    // speed, slow enough that cresting a rise reads as the track being pulled down over it.
+    const ease = segmentEasingFactor(CONFORM_RATE_PER_SECOND, deltaSeconds);
+
+    // Where the track's lower edge sits at the vehicle's centre, before any conforming. The root has
+    // already been lowered by `contactOffsetM`, so this is the *nominal* contact line: the height at which
+    // the track would rest if the vehicle were perfectly rigid and the ground beneath it perfectly flat.
+    const rootBottomY = this.root.position.y;
+
+    // The vehicle's world position, which the per-segment ground samples are taken around. Taken from the
+    // state rather than from `this.root.position` because the conforming runs after the root is posed, and
+    // this must describe the same point the simulation considers the vehicle's centre.
+    const x = state.position.x;
+    const z = state.position.z;
+
+    let index = 0;
+    for (const segments of this.trackSegments) {
+      for (let i = 0; i < segments.nodes.length; i += 1) {
+        const node = segments.nodes[i]!;
+        const baseY = this.baseSegmentY[index]!;
+        const localZ = node.position.z as number;
+        const localX = segments.side * this.trackCentreXM;
+
+        // Where this segment sits in the world, given the pose the root has just been given.
+        const worldX = x + forwardX * localZ + rightX * localX;
+        const worldZ = z + forwardZ * localZ + rightZ * localX;
+
+        const groundY = terrain(worldX, worldZ);
+
+        // ## Why the residual, and not the full height, is what the segment moves by
+        //
+        // The root has already been lowered by `contactOffsetM`, which places the *nominal* track contact
+        // line on the ground at the vehicle's centre. What is left is the difference between that nominal
+        // line and the ground under this particular station: the residual. An earlier version of this pass
+        // offset by the whole ground-to-plane distance, which dragged every segment down by the full ride
+        // height and left the tracks hanging a metre below the hull — the vehicle stopped floating and
+        // started coming apart, and every gap measurement still read zero because it only ever looked at the
+        // track against the ground, never the track against the hull.
+        //
+        // `nominalBottomY` is where this station's track bottom sits under the current root transform with
+        // no conforming at all, so the residual is exactly the correction needed.
+        // `baseY` is the segment node's authored height, which is half the track height: the node sits at the
+        // middle of the slab, so the slab's lower edge is `baseY - trackHeight / 2` above the root. The
+        // residual therefore has to be measured from the *lower edge*, not from the node's centre — comparing
+        // the ground against the node centre would leave every segment sitting half a track height too high.
+        const nominalBottomY =
+          rootBottomY + (baseY - this.trackHalfHeightM) - Math.sin(state.bodyPitchRad) * localZ
+          + Math.sin(state.bodyRollRad) * localX;
+
+        // Positive means the ground is above the nominal track line, so the segment must rise to meet it.
+        const target = clamp(groundY - nominalBottomY, -CONFORM_TRAVEL_M, CONFORM_TRAVEL_M);
+
+        const current = this.segmentOffsetsM[index] ?? 0;
+        const next = current + (target - current) * ease;
+        this.segmentOffsetsM[index] = next;
+        node.position.y = baseY + next;
+        index += 1;
+      }
+    }
+  }
+
+
   /** Enables shadow receiving on every part. */
   setShadowsEnabled(enabled: boolean): void {
     for (const mesh of this.root.getChildMeshes()) {
       mesh.receiveShadows = enabled;
     }
+  }
+
+  /**
+   * The measured ground-contact offset, for the grounding probe.
+   *
+   * Read-only and deliberately narrow. This exists because the V6 grounding investigation needed to know
+   * the renderer's *actual* offset rather than a restatement of it â€” a probe that recomputes the value it
+   * is investigating cannot detect the value being wrong, which is precisely the failure the last pass
+   * had. Everything else about the vehicle stays private.
+   */
+  debugContactOffsetM(): number {
+    return this.contactOffsetM;
   }
 
   /** World position of the barrel, used by the aim readout. */
@@ -656,7 +964,7 @@ const MODEL_NOSE_LOCAL = new Vector3Ctor(0, 0, 1);
  * renderer what it was doing.
  *
  * It is the identity, and that is the point. The model is authored nose-at-`+Z` and Babylon's
- * left-handed `Matrix.RotationY(h)` maps local `+Z` to `(sin h, cos h)` — which is already the simulation's
+ * left-handed `Matrix.RotationY(h)` maps local `+Z` to `(sin h, cos h)` â€” which is already the simulation's
  * forward vector. No sign correction is required, and the previous `-headingRad` was not a correction but
  * a reflection.
  *
@@ -677,7 +985,7 @@ export function hullVisualYawRad(headingRad: number): number {
  * suite. Every existing control test compared movement against the *simulation's* forward vector, which
  * was always correct; nothing compared that against what the player could see. At a heading of 90 degrees
  * the visible nose pointed exactly backwards, so W drove the tank out of its own tail and A/D swung the
- * nose the wrong way — and every numeric assertion still passed.
+ * nose the wrong way â€” and every numeric assertion still passed.
  *
  * Computed with Babylon's own matrix rather than by restating `sin`/`cos`, so this measures the actual
  * engine convention instead of re-asserting the algebra that produced the mistake.
@@ -709,78 +1017,13 @@ export function simulationForward(headingRad: number): { x: number; y: number; z
  */
 const GLACIS_HEIGHT_FRACTION = 0.6;
 
+
 /** Lower plate width as a fraction of the hull body's width. Narrower, so it tucks under the glacis. */
 const LOWER_PLATE_WIDTH_FRACTION = 0.86;
 
 /** Lower plate depth as a fraction of hull length. Short, so it affects only the nose profile. */
 const LOWER_PLATE_DEPTH_FRACTION = 0.1;
 
-/**
- * Bakes a set of boxes into one mesh.
- *
- * Used for the track links, where the alternative is one `CreateBox` call per link per side: 28 extra
- * meshes per vehicle, each with its own transform to update and its own draw call. Writing the vertices
- * directly produces a single mesh with the same result, which is the difference between a vehicle that
- * costs a handful of draw calls and one that costs sixty.
- *
- * @param boxes flat `[x, y, z, width, height, depth]` per box, six numbers each
- */
-function applyBoxInstances(mesh: Mesh, boxes: readonly number[]): void {
-  const count = boxes.length / 6;
-  const positions = new Float32Array(count * 24 * 3);
-  const indices = new Uint32Array(count * 36);
-  let vertex = 0;
-  let element = 0;
-
-  for (let b = 0; b < count; b += 1) {
-    const cx = boxes[b * 6]!;
-    const cy = boxes[b * 6 + 1]!;
-    const cz = boxes[b * 6 + 2]!;
-    const hw = boxes[b * 6 + 3]! / 2;
-    const hh = boxes[b * 6 + 4]! / 2;
-    const hd = boxes[b * 6 + 5]! / 2;
-
-    // Eight corners, in the same order the indices below expect.
-    const corners: readonly (readonly [number, number, number])[] = [
-      [-hw, -hh, -hd], [hw, -hh, -hd], [hw, hh, -hd], [-hw, hh, -hd],
-      [-hw, -hh, hd], [hw, -hh, hd], [hw, hh, hd], [-hw, hh, hd],
-    ];
-    for (const [dx, dy, dz] of corners) {
-      positions[vertex * 3] = cx + dx;
-      positions[vertex * 3 + 1] = cy + dy;
-      positions[vertex * 3 + 2] = cz + dz;
-      vertex += 1;
-    }
-
-    // Twelve triangles per box, wound so every face points outward. Written as a fixed list rather than
-    // generated, because a generated winding is exactly the kind of thing that silently produces an
-    // inside-out mesh that still "works" and merely looks wrong.
-    const faces = [
-      0, 2, 1, 0, 3, 2, // -Z
-      4, 5, 6, 4, 6, 7, // +Z
-      3, 7, 6, 3, 6, 2, // +Y
-      0, 1, 5, 0, 5, 4, // -Y
-      0, 4, 7, 0, 7, 3, // -X
-      1, 2, 6, 1, 6, 5, // +X
-    ];
-    const base = b * 8;
-    for (const corner of faces) {
-      indices[element] = base + corner;
-      element += 1;
-    }
-  }
-
-  const vertexData = new VertexData();
-  vertexData.positions = positions as unknown as number[];
-  vertexData.indices = indices as unknown as number[];
-  vertexData.normals = [];
-  VertexData.ComputeNormals(
-    positions as unknown as number[],
-    indices as unknown as number[],
-    vertexData.normals,
-  );
-  vertexData.applyToMesh(mesh, false);
-}
 
 /** Dimensions for the hull wedge. */
 interface GlacisDimensions {
