@@ -1,25 +1,54 @@
-import { assertValidVehicleDefinition } from './vehicle-definition-schema.js';
-import type { VehicleDefinition } from './vehicle-definition.js';
-import { vec3 } from './vec3.js';
+import { assertValidVehicleDefinition } from '../vehicle-definition-schema.js';
+import type { VehicleDefinition } from '../vehicle-definition.js';
+import { vec3 } from '../vec3.js';
 
 /**
- * The V1 placeholder tank.
+ * **Sabre** — the V8 medium. The generalist.
  *
- * This is a generic fictional vehicle, not a real tank. Combat Tank is not a simulator
- * (`docs/vision.md` §6), so the numbers are chosen to make movement *legible and fun to evaluate*,
- * not to reproduce any historical machine.
+ * ## Why this vehicle exists
  *
- * Every value here is a tuning surface, and the comments explain what each one feels like. The
- * V1 validation criterion is that the simulation reads these values rather than constants of its
- * own, so changing `maxSpeedMps` here must visibly change how the vehicle drives.
+ * A roster needs a middle. Every role needs something it is a departure *from*, and without a generalist
+ * the departure has nothing to be legible against: "the heavy is slow" means nothing until the player has
+ * driven something that is not. Sabre is that baseline, and it is deliberately the vehicle whose numbers the
+ * V7 encounter was already balanced around, so the first duel a returning player fights behaves like the one
+ * they remember while the vehicle around it has changed.
  *
- * Sizing: a WWII-medium-tank silhouette, roughly 6.7 m long, 3.3 m wide, 2.4 m tall. Those are
- * also the dimensions the client builds its placeholder mesh from, so visual and collision agree.
+ * ## Identity, in one line
+ *
+ * > Nothing to hide and nothing to boast.
+ *
+ * Its front plate is sloped but not extreme, its sides are the thinnest thing about it, its gun reloads fast
+ * enough to be relevant and hits hard enough to matter, and it turns at a rate that makes a reposition
+ * possible. Every one of those numbers is deliberately unremarkable. A medium that is good at something is a
+ * specialist; a medium that is bad at everything is not a vehicle, it is an absence of one.
+ *
+ * ## Where the numbers come from
+ *
+ * These are the V1 placeholder's handling and armour values, kept deliberately unchanged. That is a
+ * considered decision rather than laziness: V7 was owner-approved with these numbers playing correctly, and
+ * changing them would conflate two questions. "Does the roster work?" and "is the medium still the right
+ * medium?" are separable, and this version answers the first. Retuning the whole roster once three distinct
+ * vehicles can be compared is the right moment for the second, and it needs all three present to be
+ * meaningful.
+ *
+ * ## These are our tanks
+ *
+ * A fictional vehicle in broadly recognisable tank design language, not a reproduction of any real or
+ * commercial tank. Nothing here is modelled on a specific historical machine, and no number is a statistic
+ * from one. See `docs/asset-provenance.md`.
  */
-export const PLACEHOLDER_TANK: VehicleDefinition = {
-  id: 'placeholder-medium',
-  displayName: 'Placeholder Medium',
-  visualId: 'placeholder-medium',
+
+/**
+ * The Sabre's dimensions: a 6.7 m hull, 3.3 m across the tracks, 1.15 m of hull height.
+ *
+ * These are also the dimensions `tools/lib/tank-model.mjs` builds the medium model from, so the rendered
+ * model and the simulation's collision and armour geometry agree by construction rather than by a rescale
+ * that happens to land close.
+ */
+export const CT_MEDIUM: VehicleDefinition = {
+  id: 'ct-medium',
+  displayName: 'Sabre',
+  visualId: 'ct-medium',
 
   dimensions: {
     lengthM: 6.7,
@@ -299,10 +328,21 @@ export const PLACEHOLDER_TANK: VehicleDefinition = {
     // Temporary engineering value. A shell arriving at 75° or steeper deflects instead of biting.
     ricochetThresholdDeg: 75,
   },
+
+  // Every multiplier is exactly 1.0, which is the point: **Sabre is the reference the other two are
+  // described against.** The heavy's engine is 0.72× this one and the light's is 1.34× it, and those
+  // numbers are only meaningful because there is a defined baseline to be relative to. Changing one of
+  // these changes what "neutral" sounds like for the whole roster, which is worth knowing before anyone
+  // tunes it — see the note on `VehicleAudioProfile`.
+  audio: {
+    enginePitchScale: 1.0,
+    engineGainScale: 1.0,
+    trackGainScale: 1.0,
+    gunGainScale: 1.0,
+    gunPitchScale: 1.0,
+    turretGainScale: 1.0,
+  },
 };
 
 // Validate at module load. A bad definition must stop the process, not produce a broken vehicle.
-assertValidVehicleDefinition(PLACEHOLDER_TANK, PLACEHOLDER_TANK.id);
-
-/** Ids of every vehicle available in V1. */
-export const AVAILABLE_VEHICLE_IDS: readonly string[] = [PLACEHOLDER_TANK.id];
+assertValidVehicleDefinition(CT_MEDIUM, CT_MEDIUM.id);

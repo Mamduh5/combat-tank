@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   assertValidVehicleDefinition,
   validateVehicleDefinition,
 } from '../../src/shared/vehicle-definition-schema.js';
-import { AVAILABLE_VEHICLE_IDS, PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import {
+  CT_MEDIUM,
+  ROSTER_VEHICLE_IDS,
+  VEHICLE_ROSTER,
+  vehicleById,
+} from '../../src/shared/roster.js';
 import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
@@ -19,22 +24,44 @@ import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
 /** A structurally valid definition, used as the base for each mutation below. */
 function validDefinition(): VehicleDefinition {
-  return structuredClone(PLACEHOLDER_TANK);
+  return structuredClone(CT_MEDIUM);
 }
 
 describe('the shipped placeholder definition', () => {
   it('passes validation', () => {
-    const result = validateVehicleDefinition(PLACEHOLDER_TANK, PLACEHOLDER_TANK.id);
+    const result = validateVehicleDefinition(CT_MEDIUM, CT_MEDIUM.id);
     expect(result.errors).toEqual([]);
     expect(result.valid).toBe(true);
   });
 
-  it('is registered as the only available vehicle in V1', () => {
-    expect(AVAILABLE_VEHICLE_IDS).toEqual([PLACEHOLDER_TANK.id]);
+  it('is registered in the V8 roster', () => {
+    // Was "the only available vehicle in V1". V8 replaces that with roster membership, which is the
+    // question that now matters: not that there is one vehicle, but that this one is reachable from
+    // the roster the player selects out of.
+    expect(ROSTER_VEHICLE_IDS).toContain(CT_MEDIUM.id);
+    expect(vehicleById(CT_MEDIUM.id)).toBe(CT_MEDIUM);
+  });
+
+  it('keeps every roster entry resolvable and distinct', () => {
+    // The registry is the thing a selector reads, so a registry that disagrees with the array it is
+    // built from is a bug the player would meet as an empty or duplicated list.
+    expect(VEHICLE_ROSTER.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(ROSTER_VEHICLE_IDS).size).toBe(VEHICLE_ROSTER.length);
+    for (const id of ROSTER_VEHICLE_IDS) {
+      expect(vehicleById(id).id).toBe(id);
+    }
+  });
+
+  it('rejects an unknown vehicle id by name, rather than returning undefined', () => {
+    // A selector that quietly gets `undefined` here produces a blank card and a crash three systems
+    // later. The error message has to name the id *and* the alternatives, or the reader still has to
+    // go and look.
+    expect(() => vehicleById('ct-nonesuch')).toThrow(/ct-nonesuch/);
+    expect(() => vehicleById('ct-nonesuch')).toThrow(new RegExp(ROSTER_VEHICLE_IDS.join(', ')));
   });
 
   it('has plausible, self-consistent handling numbers', () => {
-    const { powertrain, traversal, ground, dimensions } = PLACEHOLDER_TANK;
+    const { powertrain, traversal, ground, dimensions } = CT_MEDIUM;
 
     // Reverse must be slower than forward, as on a real tracked vehicle.
     expect(powertrain.maxReverseSpeedMps).toBeLessThan(powertrain.maxSpeedMps);
@@ -60,11 +87,11 @@ describe('the shipped placeholder definition', () => {
   it('has an acceleration consistent with its mass and force', () => {
     // 32 t with 78 kN is a plausible ~2.4 m/s^2, which takes several seconds to reach top speed.
     // If this drifts, the vehicle stops feeling heavy.
-    const accel = PLACEHOLDER_TANK.powertrain.driveForceN / PLACEHOLDER_TANK.powertrain.massKg;
+    const accel = CT_MEDIUM.powertrain.driveForceN / CT_MEDIUM.powertrain.massKg;
     expect(accel).toBeGreaterThan(1.5);
     expect(accel).toBeLessThan(4);
 
-    expect(PLACEHOLDER_TANK.powertrain.maxSpeedMps / accel).toBeGreaterThan(2);
+    expect(CT_MEDIUM.powertrain.maxSpeedMps / accel).toBeGreaterThan(2);
   });
 });
 
@@ -167,7 +194,7 @@ describe('V2 gunnery data', () => {
   it('gives the placeholder a full 360-degree traverse ring', () => {
     // Owner's V3 decision: the generic placeholder has no arbitrary traverse stop. A full ring is
     // now the expected value, not merely an upper bound.
-    expect(PLACEHOLDER_TANK.turret.maxTraverseDeg).toBe(360);
+    expect(CT_MEDIUM.turret.maxTraverseDeg).toBe(360);
   });
 
   it('still supports a restricted traverse arc, for casemate-style vehicles', () => {
@@ -178,7 +205,7 @@ describe('V2 gunnery data', () => {
   });
 
   it('keeps elevation and depression within a physically sensible range', () => {
-    const { maxElevationDeg, maxDepressionDeg } = PLACEHOLDER_TANK.mainGun;
+    const { maxElevationDeg, maxDepressionDeg } = CT_MEDIUM.mainGun;
     expect(maxElevationDeg).toBeGreaterThan(0);
     expect(maxDepressionDeg).toBeGreaterThan(0);
     expect(maxElevationDeg).toBeLessThanOrEqual(90);
@@ -186,21 +213,21 @@ describe('V2 gunnery data', () => {
   });
 
   it('gives the turret a positive rate so it can actually traverse', () => {
-    expect(PLACEHOLDER_TANK.turret.traverseDegPerSec).toBeGreaterThan(0);
-    expect(PLACEHOLDER_TANK.turret.traverseAccelDegPerSec2).toBeGreaterThan(0);
-    expect(PLACEHOLDER_TANK.mainGun.elevateRateDegPerSec).toBeGreaterThan(0);
+    expect(CT_MEDIUM.turret.traverseDegPerSec).toBeGreaterThan(0);
+    expect(CT_MEDIUM.turret.traverseAccelDegPerSec2).toBeGreaterThan(0);
+    expect(CT_MEDIUM.mainGun.elevateRateDegPerSec).toBeGreaterThan(0);
   });
 
   it('times a full traverse slew in a humanly plausible interval', () => {
     // A quarter-circle turn should take a few seconds, not a frame and not a minute. This bounds the
     // *feel* of the placeholder without pinning a balance value.
-    const quarterTurnSeconds = 90 / PLACEHOLDER_TANK.turret.traverseDegPerSec;
+    const quarterTurnSeconds = 90 / CT_MEDIUM.turret.traverseDegPerSec;
     expect(quarterTurnSeconds).toBeGreaterThan(1);
     expect(quarterTurnSeconds).toBeLessThan(10);
   });
 
   it('gives the test shell a usable muzzle velocity and positive limits', () => {
-    const shell = PLACEHOLDER_TANK.mainShell;
+    const shell = CT_MEDIUM.mainShell;
     expect(shell.muzzleVelocityMps).toBeGreaterThan(100);
     expect(shell.massKg).toBeGreaterThan(0);
     expect(shell.maxRangeM).toBeGreaterThan(shell.muzzleVelocityMps);
@@ -212,7 +239,7 @@ describe('V2 gunnery data', () => {
   it('marks the shell as a placeholder rather than an ammunition type', () => {
     // The owner deferred the ammunition roster (OD-04). The data must not quietly start reading as a
     // commitment to a specific shell, so the id and name stay explicitly generic.
-    const shell = PLACEHOLDER_TANK.mainShell;
+    const shell = CT_MEDIUM.mainShell;
     expect(shell.id.toLowerCase()).toContain('test');
     expect(shell.displayName.toLowerCase()).toContain('test');
     // Word-bounded so the ordinary letters inside "test-ballistic" do not trip the pattern.
@@ -220,7 +247,7 @@ describe('V2 gunnery data', () => {
   });
 
   it('gives the V3 test shell penetration capability and a normalisation value', () => {
-    const shell = PLACEHOLDER_TANK.mainShell;
+    const shell = CT_MEDIUM.mainShell;
     expect(shell.nominalPenetrationMm).toBeGreaterThan(0);
     // Normalisation is a fraction of the angle penalty cancelled, so it must be a proportion.
     expect(shell.normalization).toBeGreaterThanOrEqual(0);
@@ -233,13 +260,13 @@ describe('V2 gunnery data', () => {
     const result = validateVehicleDefinition(TARGET_TANK);
     expect(result.errors).toEqual([]);
     expect(result.valid).toBe(true);
-    expect(TARGET_TANK.id).not.toBe(PLACEHOLDER_TANK.id);
+    expect(TARGET_TANK.id).not.toBe(CT_MEDIUM.id);
   });
 
   it('rejects a definition with a broken gun section', () => {
     const broken = {
-      ...PLACEHOLDER_TANK,
-      mainGun: { ...PLACEHOLDER_TANK.mainGun, reloadSeconds: 0 },
+      ...CT_MEDIUM,
+      mainGun: { ...CT_MEDIUM.mainGun, reloadSeconds: 0 },
     };
     const result = validateVehicleDefinition(broken);
     expect(result.valid).toBe(false);
@@ -248,8 +275,8 @@ describe('V2 gunnery data', () => {
 
   it('rejects a turret that could rotate through more than a full turn', () => {
     const broken = {
-      ...PLACEHOLDER_TANK,
-      turret: { ...PLACEHOLDER_TANK.turret, maxTraverseDeg: 400 },
+      ...CT_MEDIUM,
+      turret: { ...CT_MEDIUM.turret, maxTraverseDeg: 400 },
     };
     const result = validateVehicleDefinition(broken);
     expect(result.valid).toBe(false);
@@ -259,16 +286,16 @@ describe('V2 gunnery data', () => {
   it('accepts a full 360-degree traverse ring', () => {
     // The boundary case the V3 owner decision relies on: exactly one full turn is valid.
     const fullRing = {
-      ...PLACEHOLDER_TANK,
-      turret: { ...PLACEHOLDER_TANK.turret, maxTraverseDeg: 360 },
+      ...CT_MEDIUM,
+      turret: { ...CT_MEDIUM.turret, maxTraverseDeg: 360 },
     };
     expect(validateVehicleDefinition(fullRing).valid).toBe(true);
   });
 
   it('rejects sub-stepping coarse enough to let shells tunnel', () => {
     const broken = {
-      ...PLACEHOLDER_TANK,
-      mainShell: { ...PLACEHOLDER_TANK.mainShell, maxSubstepM: 100 },
+      ...CT_MEDIUM,
+      mainShell: { ...CT_MEDIUM.mainShell, maxSubstepM: 100 },
     };
     const result = validateVehicleDefinition(broken);
     expect(result.valid).toBe(false);

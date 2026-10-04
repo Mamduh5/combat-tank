@@ -1,7 +1,6 @@
-import { Simulation } from '../../core/sim/world.js';
+﻿import { Simulation } from '../../core/sim/world.js';
 import { Battle } from '../../core/battle/battle.js';
-import { PLACEHOLDER_TANK } from '../../shared/placeholder-tank.js';
-import { ENEMY_TANK } from '../../shared/enemy-tank.js';
+import { CT_MEDIUM, DEFAULT_PLAYER_VEHICLE_ID, vehicleById } from '../../shared/roster.js';
 import type { BattlefieldData } from '../../core/world/battlefield.js';
 import { DEFAULT_SCENARIO, playerScript, type ScenarioId } from './scenarios.js';
 
@@ -12,7 +11,7 @@ import { DEFAULT_SCENARIO, playerScript, type ScenarioId } from './scenarios.js'
  *
  * Balance and behaviour questions are answerable by measurement but not by intuition: "does the opponent
  * actually fight?" and "which seeds does it lose?" need a way to run the same fight many times and read
- * the numbers. That is this module's entire job. It is deliberately **not** a framework — no plugin
+ * the numbers. That is this module's entire job. It is deliberately **not** a framework â€” no plugin
  * system, no experiment file format, and no attempt to model a game that does not exist yet.
  *
  * ## The real systems, not a model of them
@@ -20,7 +19,7 @@ import { DEFAULT_SCENARIO, playerScript, type ScenarioId } from './scenarios.js'
  * Every battle here is a real `Simulation` and a real `Battle`: the same locomotion, ballistics,
  * penetration and damage, and the same `EnemyController` driving the opponent through `InputCommand`. A
  * simplified battle model would be easier to write and worthless, because the things worth measuring
- * are exactly the interactions between those systems — a turret that cannot slew fast enough, a flank
+ * are exactly the interactions between those systems â€” a turret that cannot slew fast enough, a flank
  * that never completes, a retreat that leaves the gun pointing at nothing. None of them exist in a
  * model that skips the systems.
  *
@@ -48,7 +47,7 @@ export type BattleOutcome = 'victory' | 'defeat' | 'timeout';
 
 /** One battle's result, as a flat record. */
 export interface BattleReport {
-  /** The seed this ran with — the key that makes a failure replayable. */
+  /** The seed this ran with â€” the key that makes a failure replayable. */
   readonly seed: number;
   /** Which scripted player fought it. */
   readonly scenario: ScenarioId;
@@ -70,7 +69,7 @@ export interface BattleReport {
   readonly shellsFired: number;
   /** How many struck the player at all, penetrated or not. */
   readonly shellsStruck: number;
-  /** How many penetrated — the armour model's verdict, not the opponent's choice. */
+  /** How many penetrated â€” the armour model's verdict, not the opponent's choice. */
   readonly penetrations: number;
   /**
    * Ticks in which the opponent had the player in sight, its gun was loaded, and it did not fire.
@@ -113,7 +112,57 @@ export interface BatchOptions {
    * explicitly to exercise V6, or omit it to reproduce a V5 result exactly.
    */
   readonly map?: BattlefieldData;
+
+  /**
+   * Which roster vehicle the scripted player drives, added in V8.
+   *
+   * Optional so every pre-V8 invocation is unchanged. It exists because V8's whole point is that the
+   * roster produces *different* fights, and a harness that can only ever run one matchup cannot measure
+   * that. An id rather than a definition, so a batch is described in terms the CLI, the tests and a person
+   * reading a report all spell the same way.
+   */
+  readonly playerVehicleId?: string;
+
+  /**
+   * Which roster vehicle the AI opponent drives, added in V8. Same reasoning as `playerVehicleId`.
+   *
+   * Defaults to the **medium**, not to the heavy. The pre-V8 default opponent was a medium, and the
+   * harness has a body of measurements taken against it; switching the default to a 340 mm-fronted heavy
+   * would make every one of those numbers incomparable while teaching nothing, because the change would be
+   * indistinguishable from the AI having got worse.
+   */
+  readonly opponentVehicleId?: string;
 }
+
+/**
+ * Which two roster vehicles a batch fights.
+ *
+ * A pair rather than two loose parameters, so a report can name the matchup it came from without the
+ * caller having to remember which way round they passed them. Adding a vehicle to the roster does not
+ * require touching this type: it is ids, and the roster is the registry that resolves them.
+ */
+export interface Matchup {
+  readonly playerVehicleId: string;
+  readonly opponentVehicleId: string;
+}
+
+/**
+ * The opponent a batch fights when the caller does not name one.
+ *
+ * The **medium**, deliberately, and not the roster's `DEFAULT_OPPONENT_VEHICLE_ID` (which is the heavy and is
+ * the right default for the *game*). The distinction matters: every measurement this harness produced before
+ * V8 was taken against a medium, so switching the harness default to a heavy with 820 mm of frontal plate
+ * would make the whole prior body of numbers incomparable — and the change would be indistinguishable, from
+ * the report alone, from the AI having got worse.
+ *
+ * ## This was a real bug, and the test that found it is the reason this comment is long
+ *
+ * The `BatchOptions.opponentVehicleId` doc comment said "defaults to the medium" while the code read
+ * `?? DEFAULT_OPPONENT_VEHICLE_ID` and got the heavy. Naming the constant separately rather than importing
+ * the roster's is what fixes it durably: there is now no expression here that *can* silently pick up a
+ * change to the game's preferred opponent, and the two defaults are visibly different on purpose.
+ */
+const DEFAULT_BATCH_OPPONENT_VEHICLE_ID = CT_MEDIUM.id;
 
 /** The defaults, exposed so the CLI and the tests cannot disagree about them. */
 export const DEFAULT_BATCH_OPTIONS: BatchOptions = {
@@ -128,16 +177,19 @@ export const DEFAULT_BATCH_OPTIONS: BatchOptions = {
  *
  * Exported on its own so a single failing seed can be replayed without a batch around it, which is what
  * a developer reaches for when the batch hands them a suspect seed.
+ *
+ * @param matchup which two roster vehicles fight. Omitting it reproduces the pre-V8 duel exactly.
  */
 export function runBattle(
   seed: number,
   scenario: ScenarioId,
   maxTicks: number,
   map?: BattlefieldData,
+  matchup?: Matchup,
 ): BattleReport {
   const simulation = new Simulation({
-    vehicle: PLACEHOLDER_TANK,
-    target: ENEMY_TANK,
+    vehicle: matchup === undefined ? CT_MEDIUM : vehicleById(matchup.playerVehicleId),
+    target: matchup === undefined ? CT_MEDIUM : vehicleById(matchup.opponentVehicleId),
     enemySeed: seed,
     // Spread rather than conditionally assigned: passing `undefined` is the documented way to get
     // the legacy arena, and an explicit ternary here would make the two paths differ invisibly.
@@ -276,10 +328,25 @@ export interface BattleSuspect {
  */
 export function runBatch(options: Partial<BatchOptions> = {}): BatchReport {
   const resolved: BatchOptions = { ...DEFAULT_BATCH_OPTIONS, ...options };
+  // Resolved once, here, rather than per battle. An unknown id therefore fails before any simulation is
+  // constructed, and the whole batch fails for one reason rather than 10 battles each failing differently.
+  const matchup: Matchup | undefined =
+    resolved.playerVehicleId === undefined && resolved.opponentVehicleId === undefined
+      ? undefined
+      : {
+          playerVehicleId: resolved.playerVehicleId ?? DEFAULT_PLAYER_VEHICLE_ID,
+          opponentVehicleId: resolved.opponentVehicleId ?? DEFAULT_BATCH_OPPONENT_VEHICLE_ID,
+        };
+  if (matchup !== undefined) {
+    // Validate both ids eagerly, for the same reason.
+    vehicleById(matchup.playerVehicleId);
+    vehicleById(matchup.opponentVehicleId);
+  }
+
   const battles: BattleReport[] = [];
   for (let i = 0; i < resolved.battles; i += 1) {
     battles.push(
-      runBattle(resolved.seedStart + i, resolved.scenario, resolved.maxTicks, resolved.map),
+      runBattle(resolved.seedStart + i, resolved.scenario, resolved.maxTicks, resolved.map, matchup),
     );
   }
   return aggregate(resolved, battles);
@@ -290,7 +357,7 @@ export function runBatch(options: Partial<BatchOptions> = {}): BatchReport {
  *
  * Averages deliberately exclude timeouts from the duration figure. A timeout lasted exactly as long as
  * it was allowed to, so including it would drag the mean toward the budget and make a batch of stalled
- * battles look like a batch of long fights — the opposite of the truth the number is meant to carry.
+ * battles look like a batch of long fights â€” the opposite of the truth the number is meant to carry.
  */
 function aggregate(options: BatchOptions, battles: readonly BattleReport[]): BatchReport {
   const outcomeCounts: Record<BattleOutcome, number> = { victory: 0, defeat: 0, timeout: 0 };
@@ -348,7 +415,7 @@ function aggregate(options: BatchOptions, battles: readonly BattleReport[]): Bat
  *
  * The bar is deliberately high. A battle where the opponent fires, lands shots and loses is a fine
  * battle and is not flagged however lopsided. What is flagged is the set of behaviours that mean the
- * opponent has stopped participating — which is what a batch is good at spotting and a single
+ * opponent has stopped participating â€” which is what a batch is good at spotting and a single
  * playthrough is bad at.
  */
 export function suspectReason(battle: BattleReport): string | null {
@@ -380,7 +447,7 @@ export function suspectReason(battle: BattleReport): string | null {
  * Consecutive-tick stall above which a battle is reported as suspicious: thirty seconds.
  *
  * Chosen from measurement, not taste. A healthy V5 opponent lays its gun within a few seconds, so a
- * stall this long cannot be a slow convergence — it is a stuck one. Comfortably below the default
+ * stall this long cannot be a slow convergence â€” it is a stuck one. Comfortably below the default
  * two-minute budget so a genuinely hard fight is not mistaken for a broken one.
  */
 const STALL_TICKS_THRESHOLD = 1800;

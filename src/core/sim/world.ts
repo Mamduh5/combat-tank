@@ -1,6 +1,6 @@
-import { NEUTRAL_INPUT, type InputCommand } from '../../shared/input.js';
+﻿import { NEUTRAL_INPUT, type InputCommand } from '../../shared/input.js';
 import type { VehicleDefinition } from '../../shared/vehicle-definition.js';
-import { PLACEHOLDER_TANK as SPAWN_VEHICLE } from '../../shared/placeholder-tank.js';
+import { CT_MEDIUM as SPAWN_VEHICLE } from '../../shared/roster.js';
 import { atan2, cos, sin, vec3, type Vec3 } from '../math/index.js';
 import { Tank, type VehicleTelemetry } from '../vehicle/tank.js';
 import { DEFAULT_TERRAIN_CONFIG, type Terrain, type TerrainConfig } from '../world/terrain.js';
@@ -21,7 +21,7 @@ import { EnemyController } from '../ai/enemy-controller.js';
  *
  * This class is the reason the project's architecture is shaped the way it is (ADR-0001). It has
  * no dependency on Babylon, Colyseus, the DOM, or a wall clock, so the *same* object runs in the
- * browser client, in a unit test, and — from V9 — inside an authoritative server. The client never
+ * browser client, in a unit test, and â€” from V9 â€” inside an authoritative server. The client never
  * writes vehicle state; it supplies an `InputCommand` and reads the result.
  *
  * Time is advanced by `advance(realDeltaSeconds)`, which accumulates real time and runs whole
@@ -57,7 +57,7 @@ const TARGET_DISTANCE_M = 60;
  * Chosen by measurement rather than by feel, because this number is constrained from below as well as
  * above. At the V3 distance of 60 m the encounter worked, but it was decided by a race: two guns that
  * both reload in about five seconds had both fired before either crew had settled. The obvious fix was
- * to push it out to 78 m — which measured worse, because a longer path crosses more of the procedural
+ * to push it out to 78 m â€” which measured worse, because a longer path crosses more of the procedural
  * terrain, and the worst sustained gradient along it reached 29 degrees: past the vehicle's 26-degree
  * climb limit, so the opening ground was not drivable.
  *
@@ -72,6 +72,18 @@ const V4_OPENING_DISTANCE_M = 55;
 const EMPTY_COMBAT: readonly CombatResult[] = Object.freeze([]);
 
 /**
+ * The instance identity given to the opponent, so it can never collide with the player's.
+ *
+ * Suffixing rather than numbering: the value is only ever compared for equality against another instance
+ * id inside one battle, so any injective scheme works, and a readable name beats `ct-medium#1` in a log.
+ * When the two sides are different vehicles the suffix is redundant but harmless, and keeping the minting
+ * in one place means a fourth vehicle cannot introduce a second, colliding scheme.
+ */
+function opponentInstanceId(definition: VehicleDefinition): string {
+  return `${definition.id}#opponent`;
+}
+
+/**
  * Adapts a vehicle into something the shell system can collide with.
  *
  * This is the seam between V2's ballistics and V3's armour. `shell.ts` knows only that something solid
@@ -84,8 +96,14 @@ class VehicleObstacle implements ShellObstacle {
   private readonly vehicle: Tank;
 
   constructor(vehicle: Tank) {
+    // The **instance** id, not the definition id. V8 made "medium vs medium" a supported matchup, and
+    // with both vehicles reporting `ct-medium` the shell system's self-exclusion rule — which skips the
+    // obstacle whose id equals the shooter's — also skipped the player, so every shell the opponent fired
+    // passed straight through it and landed far beyond. The symptom was an opponent that fired for two
+    // minutes without ever receiving a combat result, and therefore never learned to flank: it looks
+    // exactly like a broken AI and is not one.
+    this.vehicleId = vehicle.instanceId;
     this.vehicle = vehicle;
-    this.vehicleId = vehicle.definition.id;
   }
 
   /**
@@ -138,7 +156,7 @@ class VehicleObstacle implements ShellObstacle {
  *  - **similar elevation**, so the shot is roughly level and the drop is learnable;
  *  - **flat, drivable ground** between the two, so the player can actually get there.
  *
- * The search is deterministic — fixed sample order, no randomness — because the whole simulation is
+ * The search is deterministic â€” fixed sample order, no randomness â€” because the whole simulation is
  * (ADR-0001, ADR-0005), and a target that moved between runs would make every V3 test flaky.
  */
 function findTargetPosition(
@@ -186,12 +204,12 @@ function findTargetPosition(
 
     // Penalise height difference and rough ground around the target, and prefer candidates straight
     // ahead. Without the last term, flat terrain scores every candidate identically and the first one
-    // sampled wins — which put the target off at a 63-degree bearing, somewhere the player had to
+    // sampled wins â€” which put the target off at a 63-degree bearing, somewhere the player had to
     // discover rather than somewhere they expected.
     // Height difference is penalised linearly **and** super-linearly past a threshold. The linear term
     // alone was not enough: measurement produced an opponent 14 m below the player, which scored well
     // only because every other candidate was worse. Past `PLACEMENT_MAX_HEIGHT_DIFFERENCE_M` the shot
-    // is effectively out of the fight — it has to drop, which is not learnable at prototype ranges —
+    // is effectively out of the fight â€” it has to drop, which is not learnable at prototype ranges â€”
     // so it needs a penalty big enough to lose to any candidate that is merely imperfect.
     const heightDifference = Math.abs(groundY - from.y);
     const excessHeightM = Math.max(0, heightDifference - PLACEMENT_MAX_HEIGHT_DIFFERENCE_M);
@@ -204,7 +222,7 @@ function findTargetPosition(
     // This replaces a hard `continue` on each failed constraint, and that change is the fix for a real
     // bug. Rejecting candidates outright meant that on terrain steeper than the driveability limit
     // *every* candidate was rejected, and the search silently fell back to a straight line at the
-    // default distance — a position that satisfied nothing at all: 15 m of elevation difference, no
+    // default distance â€” a position that satisfied nothing at all: 15 m of elevation difference, no
     // line of sight, and ground the tank could not cross. Falling through to the worst possible answer
     // is worse than choosing the least-bad real one.
     //
@@ -282,7 +300,7 @@ function hasLineOfSight(
  * and requires nothing to rise above the line joining them. Used only at spawn, to guarantee the
  * encounter opens as a duel rather than as two tanks who cannot see each other.
  *
- * Deliberately symmetric and independent of which side is which — the opponent does not start with an
+ * Deliberately symmetric and independent of which side is which â€” the opponent does not start with an
  * advantage the player lacks.
  */
 function canEngageFrom(terrain: Terrain, from: Vec3, toX: number, toGroundY: number, toZ: number): boolean {
@@ -306,9 +324,9 @@ function canEngageFrom(terrain: Terrain, from: Vec3, toX: number, toGroundY: num
  *
  * Two independent tests, because they catch different failures:
  *
- *  - **step height** over a fixed stride — catches a cliff face or a sudden drop, which is what
+ *  - **step height** over a fixed stride â€” catches a cliff face or a sudden drop, which is what
  *    actually stops a tracked vehicle: a short step is a bump, a tall one is a wall;
- *  - **gradient angle** at each sample — catches a *sustained* climb.
+ *  - **gradient angle** at each sample â€” catches a *sustained* climb.
  *
  * The slope test is the V4 addition, and it exists because of a measured failure. The step test alone
  * accepted a pair of positions separated by a 57-degree face: sampled at a 6 m stride the height
@@ -358,7 +376,7 @@ function isPathDriveable(terrain: Terrain, from: Vec3, toX: number, toZ: number)
     //
     // Only these two, not all four world axes: an axis-aligned test rejects ground for being steep in
     // a direction the vehicle never travels, which on a long path rejects every candidate and drops the
-    // placement search back to its fallback — measurably worse opening positions, not better ones.
+    // placement search back to its fallback â€” measurably worse opening positions, not better ones.
     if (terrain.slopeDegreesAlong(x1, z1, dirX, dirZ) > limit) {
       return false;
     }
@@ -474,7 +492,7 @@ export interface SimulationOptions {
   /**
    * Optional stationary target to shoot at, added in V3.
    *
-   * It does not drive, aim, or fire — it exists so armour and damage can be tested by hand. Its
+   * It does not drive, aim, or fire â€” it exists so armour and damage can be tested by hand. Its
    * position comes from the simulation's default spawn scan, so it lands on usable ground rather than
    * at a coordinate someone assumed was flat.
    */
@@ -506,7 +524,7 @@ export interface SimulationOptions {
    * controller stepping it.
    *
    * This is the honest way to support both. Making an inert target work by zeroing its speed and
-   * removing its turret would only mean fighting an opponent that cannot move — the tests and tools
+   * removing its turret would only mean fighting an opponent that cannot move â€” the tests and tools
    * that want a static target need the controller removed outright, not neutered. The armour tests
    * depend on this: they need an object that stays exactly where it was put so a shell fired at a
    * known bearing lands on a known plate.
@@ -517,15 +535,15 @@ export interface SimulationOptions {
 /**
  * Compass bearing from one ground point to another, radians, in the vehicle heading frame.
  *
- * Uses the core's own `atan2`. This started as a hand-rolled quadrant fixup — `dx >= 0 ? atan(dx/dz) :
- * PI - atan(dx/dz)` — which was wrong in the third quadrant: for a target behind-and-right it
+ * Uses the core's own `atan2`. This started as a hand-rolled quadrant fixup â€” `dx >= 0 ? atan(dx/dz) :
+ * PI - atan(dx/dz)` â€” which was wrong in the third quadrant: for a target behind-and-right it
  * returned a bearing roughly `PI` away from the correct one, so the opponent spawned facing *away*
  * from the player. The core already had a deterministic, unit-tested `atan2` for exactly this; the
  * lesson is to look for it rather than to re-derive it.
  */
 function headingToward(from: Vec3, to: Vec3): number {
   // Arguments are (y, x) to match `atan2`'s convention, with the world axes mapped so that +Z is a
-  // bearing of zero and +X is a bearing of +90 degrees — the same frame the vehicle's heading uses.
+  // bearing of zero and +X is a bearing of +90 degrees â€” the same frame the vehicle's heading uses.
   return atan2(to.x - from.x, to.z - from.z);
 }
 
@@ -656,7 +674,7 @@ export class Simulation {
     const spawn = options.spawn ?? authoredSpawn ?? this.defaultSpawn();
     // Heading resolution, in order of authority: an explicit option, then the map's authored facing,
     // then the legacy zero. Written as three separate statements because the first version chained `??`
-    // with a ternary, and `a ?? b !== null ? x : y` parses as `(a ?? (b !== null)) ? x : y` — a number
+    // with a ternary, and `a ?? b !== null ? x : y` parses as `(a ?? (b !== null)) ? x : y` â€” a number
     // used as a condition, which type-checks happily and then means nothing at all.
     let spawnHeading = 0;
     if (options.spawnHeadingRad !== undefined) {
@@ -697,6 +715,9 @@ export class Simulation {
         ? null
         : new Tank(options.target, {
             position: targetPosition,
+            // A distinct instance identity from the player's, so a mirror matchup — the same roster
+            // vehicle on both sides — still lets shells hit the other tank. See `VehicleInit.instanceId`.
+            instanceId: opponentInstanceId(options.target),
             // An authored spawn carries its own facing; a scanned one must be turned to face the player.
             headingRad: authoredTarget === null
               ? headingToward(targetPosition, spawn)
@@ -740,7 +761,7 @@ export class Simulation {
    * Returns the world to its opening state without rebuilding it.
    *
    * Restarting by constructing a new `Simulation` would work, but it forces every consumer to rebuild
-   * its view of the world too — the renderer, the physics collider, the audio graph — and any of them
+   * its view of the world too â€” the renderer, the physics collider, the audio graph â€” and any of them
    * holding a reference to the old object would silently stop updating. Resetting in place means the
    * same `Simulation` identity survives a restart, which is what lets a restart be a single call.
    *
@@ -898,7 +919,7 @@ export class Simulation {
       // The controller measures its own line of sight from its own gun to the player's hull, and
       // reports it here afterwards. Reading it back rather than passing it in makes it structurally
       // impossible for the opponent to behave as though it can see the player while the HUD says it
-      // cannot — the two were separate measurements before, and they did disagree.
+      // cannot â€” the two were separate measurements before, and they did disagree.
       this.target.step(this.enemyController.think(this.dtSeconds), this.terrain, this.dtSeconds);
       this.enemySeesPlayer = this.enemyController.lastSawPlayer;
     }
@@ -911,7 +932,8 @@ export class Simulation {
         this.vehicle.definition.mainShell,
         playerShot.origin,
         playerShot.direction,
-        this.vehicle.definition.id,
+        // The instance id, so the shell system can tell this vehicle apart from an identical opponent.
+        this.vehicle.instanceId,
       );
     }
 
@@ -922,7 +944,7 @@ export class Simulation {
           this.target.definition.mainShell,
           enemyShot.origin,
           enemyShot.direction,
-          this.target.definition.id,
+          this.target.instanceId,
         );
       }
     }
@@ -943,7 +965,7 @@ export class Simulation {
     // The single most important line added in this version. Everything the V5 opponent decides rests
     // on knowing whether its own shots work, and it cannot learn that without being told. Until this
     // call existed the opponent could fire five shells into a 400 mm frontal plate, watch all five
-    // bounce, and then do exactly the same thing again — because nothing in the simulation ever told
+    // bounce, and then do exactly the same thing again â€” because nothing in the simulation ever told
     // it what had happened. That is OD-11, and it was never an armour problem.
     //
     // Only `incomingCombat` is passed: the results of shells that struck **the player**, which are by
@@ -989,13 +1011,13 @@ export class Simulation {
     this.enemyShotsSeenLastTick = target.telemetry.shotsFired;
 
     const observer: SpottingSubject = {
-      id: this.vehicle.definition.id,
+      id: this.vehicle.instanceId,
       position: this.vehicle.state.position,
       eyeHeightM: this.vehicle.definition.turret.ringHeightM,
       firedThisTick: false,
     };
     const subject: SpottingSubject = {
-      id: target.definition.id,
+      id: target.instanceId,
       position: target.state.position,
       eyeHeightM: target.definition.turret.ringHeightM,
       firedThisTick: targetFiredThisTick,
@@ -1063,8 +1085,8 @@ export class Simulation {
 
       // A hit on the opponent: the player fired this. A hit on the player: the opponent fired it.
       // Both go through the identical resolver, which is the property that makes the two sides
-      // symmetrical — there is no separate rule set for damage dealt to the player.
-      if (impact.targetId === target.definition.id) {
+      // symmetrical â€” there is no separate rule set for damage dealt to the player.
+      if (impact.targetId === target.instanceId) {
         const state = target.state;
         results.push(
           resolveCombat(
@@ -1077,7 +1099,7 @@ export class Simulation {
             state.headingRad + target.turretState.localAngleRad,
           ),
         );
-      } else if (impact.targetId === this.vehicle.definition.id) {
+      } else if (impact.targetId === this.vehicle.instanceId) {
         incoming.push(
           resolveCombat(
             this.vehicle.definition,
@@ -1144,7 +1166,7 @@ export class Simulation {
    * Combat outcomes produced by the most recent `tick`.
    *
    * Empty on any tick with no vehicle impact. Like `impacts`, it is replaced each tick so a per-frame
-   * consumer sees each outcome once — which is what the hit-feedback HUD relies on.
+   * consumer sees each outcome once â€” which is what the hit-feedback HUD relies on.
    */
   get combat(): readonly CombatResult[] {
     return this.combatThisTick;

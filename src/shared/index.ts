@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Types and data shared by the simulation core and its shells.
  *
  * Nothing here imports from the core, the client, or the server, so both the core and the shells
@@ -8,5 +8,6 @@ export * from './vec3.js';
 export * from './input.js';
 export * from './vehicle-definition.js';
 export * from './vehicle-definition-schema.js';
-export * from './placeholder-tank.js';
+export * from './vehicle-model-contract.js';
+export * from './roster.js';
 export * from './placeholder-target.js';

@@ -54,6 +54,9 @@ const TRACKED_CODES = new Set([
   'Space',
   // V6: returns the camera behind the tank. The escape hatch that makes a free orbit safe.
   'KeyC',
+  // V8: reopens the vehicle selector mid-battle. Tracked rather than handled with a raw `keydown` listener so
+  // that the one-shot press survives into the frame loop and cannot be missed on a slow frame.
+  'KeyV',
 ]);
 
 export interface LookDelta {
@@ -173,6 +176,21 @@ export class InputManager {
         console.info('Combat Tank: pointer lock was declined; continuing with a visible cursor.', error);
       });
     }
+  }
+
+  /**
+   * Releases the pointer lock, for handing the cursor back to the player.
+   *
+   * Opened in V8 for the vehicle selector: the overlay is full-screen and clickable, and a cursor still
+   * captured by the canvas makes its buttons unusable. Written defensively rather than assuming the API is
+   * present — `exitPointerLock` is a `document` method, and this class is otherwise careful about browser
+   * APIs that may be unavailable or blocked.
+   */
+  releaseLock(): void {
+    if (document.pointerLockElement === null) {
+      return;
+    }
+    document.exitPointerLock();
   }
 
   /**

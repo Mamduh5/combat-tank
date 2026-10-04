@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Simulation } from '../../src/core/sim/world.js';
 import { Terrain } from '../../src/core/world/terrain.js';
 import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * The player and the test target must start in positions that make the game playable.
@@ -22,7 +22,7 @@ describe('start positions', () => {
   // `targetIsOpponent: false` keeps the V3 inert target for these tests: they are about *placement*, and
   // an opponent that drives away from its spawn makes every positional assertion meaningless.
   const sim = new Simulation({
-    vehicle: PLACEHOLDER_TANK,
+    vehicle: CT_MEDIUM,
     target: TARGET_TANK,
     targetIsOpponent: false,
   });
@@ -101,7 +101,7 @@ describe('start positions', () => {
     //    passed originally because the V3 spawn sat on ground gentle enough to absorb a 4x error.
     //  - it sampled the world axes rather than the direction of travel. A slope *across* the route
     //    only makes a tank lean on its suspension; it does not stop it. Measured on the V4 arena, the
-    //    worst cross-gradient is 28.8 degrees while the along-route gradient is 19.3 — and it is the
+    //    worst cross-gradient is 28.8 degrees while the along-route gradient is 19.3 â€” and it is the
     //    second number that decides whether the player can drive from their spawn to the opponent.
     //
     // What is asserted is therefore the gradient the vehicle actually has to climb, against the
@@ -134,7 +134,7 @@ describe('start positions', () => {
     // must be under the vehicle's climb limit, which the placement search enforces by rejecting any
     // candidate that is not (see `isPathDriveable`). A tighter margin would require changing the
     // terrain generator's wavelengths, which is a V1 decision rather than a V4 one.
-    const maxClimbDeg = PLACEHOLDER_TANK.ground.maxClimbDeg;
+    const maxClimbDeg = CT_MEDIUM.ground.maxClimbDeg;
     expect(worstSlope).toBeLessThan(maxClimbDeg);
   });
 
@@ -142,7 +142,7 @@ describe('start positions', () => {
     // Placement must not vary between runs, or every integration test that fires at the target
     // becomes flaky (ADR-0001, ADR-0005).
     const again = new Simulation({
-      vehicle: PLACEHOLDER_TANK,
+      vehicle: CT_MEDIUM,
       target: TARGET_TANK,
       targetIsOpponent: false,
     });

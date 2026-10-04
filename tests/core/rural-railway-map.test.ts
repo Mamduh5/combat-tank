@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Terrain, type LevelCorridor } from '../../src/core/world/terrain.js';
 import { Battlefield } from '../../src/core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import { SPOTTING_TUNING } from '../../src/core/spotting/spotting.js';
 
 /**
@@ -50,7 +50,7 @@ describe('graded corridors', () => {
   it('leaves ground outside its reach completely untouched', () => {
     // The single most important property, and the one a careless implementation breaks. The offset is
     // added to the natural height on every sample, so a version returning the corridor's height rather
-    // than its *difference* would double the terrain everywhere — turning the whole map into a hill while
+    // than its *difference* would double the terrain everywhere â€” turning the whole map into a hill while
     // every corridor-specific test still passed. That bug happened; this is its regression test.
     const bare = new Terrain({ seed: 7, halfSizeM: 400, amplitudeM: 4, edgeRiseM: 0 });
     const graded = terrainWithCorridor(TEST_CORRIDOR);
@@ -65,7 +65,7 @@ describe('graded corridors', () => {
     //
     // Amplitude 2 m rather than something larger, and that choice is deliberate. The corridor's cut depth is
     // soft-clamped to 4 m so a badly authored line cannot build a cliff, and on terrain with a 6 m amplitude
-    // the clamp — not the grading — is what limits the result. At 2 m the clamp stays out of the way and this
+    // the clamp â€” not the grading â€” is what limits the result. At 2 m the clamp stays out of the way and this
     // measures the grading. The clamp's own behaviour is asserted separately, below.
     const bare = new Terrain({ seed: 7, halfSizeM: 400, amplitudeM: 2, edgeRiseM: 0 });
     const graded = terrainWithCorridor(TEST_CORRIDOR, 2);
@@ -142,7 +142,7 @@ describe('graded corridors', () => {
     // And it never becomes unclimbable, measured across the crossing direction.
     for (let z = -60; z <= 60; z += 2) {
       expect(terrain.slopeDegreesAlong(0, z, 0, 1), `at z=${z}`).toBeLessThan(
-        PLACEHOLDER_TANK.ground.maxClimbDeg,
+        CT_MEDIUM.ground.maxClimbDeg,
       );
     }
   });
@@ -177,7 +177,7 @@ describe('graded corridors', () => {
 describe('the battlefield is drivable', () => {
   const battlefield = new Battlefield(MARLOWE_CROSSING);
   const terrain = battlefield.terrain;
-  const { maxClimbDeg, maxDescendDeg } = PLACEHOLDER_TANK.ground;
+  const { maxClimbDeg, maxDescendDeg } = CT_MEDIUM.ground;
 
   /** Steepest sustained gradient along a straight line, in each direction. */
   function worstGradient(from: { x: number; z: number }, to: { x: number; z: number }) {
@@ -305,7 +305,7 @@ describe('the battlefield is drivable', () => {
       }
     }
     // The measured value on the current map is about 72%. Asserted well below the rejected map's profile
-    // rather than at the exact figure, so an ordinary terrain tweak does not break the build — but a
+    // rather than at the exact figure, so an ordinary terrain tweak does not break the build â€” but a
     // regression back to "most of this is a hillside" does.
     expect(comfortable / total).toBeGreaterThan(0.6);
   });
@@ -319,7 +319,7 @@ describe('the battlefield is drivable', () => {
  * The previous V6 opening was authored deliberately: both tanks spawned without line of sight, on the
  * reasoning that mutual blindness is a tactical opening rather than a standoff. The owner played it and could
  * not find the enemy at all. Measuring it against the real `Battlefield.hasLineOfSight` showed the design was
- * far worse than "no line of sight" — the opponent was **233 m** away, past the 200 m base sight range, and
+ * far worse than "no line of sight" â€” the opponent was **233 m** away, past the 200 m base sight range, and
  * driving straight at it revealed it nowhere within 200 m.
  *
  * So the opening geometry was independently broken, quite apart from the control bugs, and it needed
@@ -336,7 +336,7 @@ describe('the opponent is findable from the opening', () => {
   /** Turret-roof eye height on both tanks, matching what the spotting system reasons about. */
   const eye = (x: number, z: number) => ({
     x,
-    y: field.terrain.heightAt(x, z) + PLACEHOLDER_TANK.turret.ringHeightM,
+    y: field.terrain.heightAt(x, z) + CT_MEDIUM.turret.ringHeightM,
     z,
   });
 
@@ -364,7 +364,7 @@ describe('the opponent is findable from the opening', () => {
     // The one risk of making the opponent visible at spawn is an unavoidable opening hit. At 146 m the player
     // has roughly two seconds of the opponent's approach before it is inside its own firing band, and the
     // opponent still has to traverse its turret. Asserted as a range rather than as a simulation of the
-    // opponent's behaviour, because the thing being guaranteed is *map geometry*, not AI timing — the AI is
+    // opponent's behaviour, because the thing being guaranteed is *map geometry*, not AI timing â€” the AI is
     // explicitly out of scope for this pass.
     expect(openingRange).toBeGreaterThan(120);
   });
@@ -422,7 +422,7 @@ describe('the opponent is findable from the opening', () => {
       expect(
         field.terrain.slopeDegreesAlong(x, z, dirX, dirZ),
         `closing gradient at ${x.toFixed(0)},${z.toFixed(0)}`,
-      ).toBeLessThan(PLACEHOLDER_TANK.ground.maxClimbDeg);
+      ).toBeLessThan(CT_MEDIUM.ground.maxClimbDeg);
     }
   });
 });

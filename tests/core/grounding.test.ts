@@ -38,7 +38,7 @@ import {
 import { Simulation } from '../../src/core/sim/world.js';
 import type { Battlefield } from '../../src/core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../src/core/world/maps/marlowe-crossing.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import { makeInput } from '../../src/shared/input.js';
 import { TANK_PROPORTIONS } from '../../src/client/render/tank-proportions.js';
 import {
@@ -50,8 +50,8 @@ import {
 } from '../../src/tools/headless/grounding-measurement.js';
 
 /** The vehicle's own footprint, which is what the support grid is sized from. */
-const LENGTH_M = PLACEHOLDER_TANK.dimensions.lengthM;
-const WIDTH_M = PLACEHOLDER_TANK.dimensions.widthM;
+const LENGTH_M = CT_MEDIUM.dimensions.lengthM;
+const WIDTH_M = CT_MEDIUM.dimensions.widthM;
 
 /**
  * Runs the simulation until the vehicle has settled into a pose at a location.
@@ -67,7 +67,7 @@ function settleAt(
   headingRad: number,
 ): { pitchRad: number; rollRad: number; positionY: number } {
   const sim = new Simulation({
-    vehicle: PLACEHOLDER_TANK,
+    vehicle: CT_MEDIUM,
     map: MARLOWE_CROSSING,
   });
   sim.vehicle.reset({ x, y: field.terrain.heightAt(x, z), z }, headingRad);
@@ -293,7 +293,7 @@ describe('contact with the ground on the real battlefield', () => {
     // The core contract this pass must not have broken: the attitude is presentation, so however it is
     // derived, the vehicle's own position and ride height are untouched. Driving a full encounter and
     // checking the hull never leaves the ground is the end-to-end statement of that.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, map: MARLOWE_CROSSING });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, map: MARLOWE_CROSSING });
     let worstLiftM = 0;
     for (let i = 0; i < 600; i += 1) {
       sim.advance(1 / 60, makeInput(1, Math.sin(i / 90) * 0.5));
@@ -365,7 +365,7 @@ describe('contact with the ground on the real battlefield', () => {
     // input twice must produce identical results, and the vehicle must still be able to reach the places
     // it could before: the field route and the crossing.
     const run = () => {
-      const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, map: MARLOWE_CROSSING });
+      const sim = new Simulation({ vehicle: CT_MEDIUM, map: MARLOWE_CROSSING });
       for (let i = 0; i < 600; i += 1) sim.advance(1 / 60, makeInput(1, 0));
       const s = sim.vehicle.state;
       return { x: s.position.x, y: s.position.y, z: s.position.z, headingRad: s.headingRad };

@@ -148,18 +148,33 @@ export class MeshBuilder {
     const hh = height / 2;
     const hd = depth / 2;
 
-    // Each face is defined by its outward normal and the two in-plane axes, so the winding is derived
-    // rather than hand-written six times (and mis-written once).
+    // Each face is derived from its outward normal: the centre sits half an extent out **along the normal*,
+    // and the two in-plane axes carry that face's own half-extents.
+    //
+    // This was rewritten in V8 after three separate defects were found in it. All three type-checked, all
+    // three produced geometry that loaded and rendered, and together they are why the generated hull measured
+    // 3.564 m wide on a 3.3 m vehicle and sat 0.345 m below its own origin:
+    //
+    //  1. Both in-plane axes were offset by `hw` unconditionally, which is right only for a cube. Every box in
+    //     this model is longer than it is wide, so each took its *depth* from its *width*.
+    //  2. The `+Y` face centre was written as `[hw, hh, -hd]`, putting the top face below the origin.
+    //  3. The six centres were hand-written literals that had to be kept in agreement by hand.
+    //
+    // Deriving the centre from the normal removes the third class of bug: one rule instead of six numbers.
     const faces = [
-      { n: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], su: width, sv: height, c: [hw, hh, hd] },
-      { n: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0], su: width, sv: height, c: [-hw, hh, -hd] },
-      { n: [1, 0, 0], u: [0, 0, -1], v: [0, 1, 0], su: depth, sv: height, c: [hw, hh, -hd] },
-      { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0], su: depth, sv: height, c: [-hw, hh, hd] },
-      { n: [0, 1, 0], u: [1, 0, 0], v: [0, 0, 1], su: width, sv: depth, c: [hw, hh, -hd] },
-      { n: [0, -1, 0], u: [1, 0, 0], v: [0, 0, -1], su: width, sv: depth, c: [-hw, -hh, hd] },
+      { n: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], hu: hw, hv: hh, su: width, sv: height },
+      { n: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0], hu: hw, hv: hh, su: width, sv: height },
+      { n: [1, 0, 0], u: [0, 0, -1], v: [0, 1, 0], hu: hd, hv: hh, su: depth, sv: height },
+      { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0], hu: hd, hv: hh, su: depth, sv: height },
+      { n: [0, 1, 0], u: [1, 0, 0], v: [0, 0, 1], hu: hw, hv: hd, su: width, sv: depth },
+      { n: [0, -1, 0], u: [1, 0, 0], v: [0, 0, -1], hu: hw, hv: hd, su: width, sv: depth },
     ];
 
     for (const f of faces) {
+      // How far this face sits from the box centre, along its own normal: hw, hh or hd depending on which
+      // axis the normal runs down. Deriving it beats six literals that can disagree with each other.
+      const out = f.n[0] !== 0 ? hw : f.n[1] !== 0 ? hh : hd;
+
       const base = this.vertexCount;
       for (const [su, sv] of [
         [-1, -1],
@@ -168,9 +183,9 @@ export class MeshBuilder {
         [-1, 1],
       ]) {
         this.vertex(
-          f.c[0] + f.u[0] * su * hw + f.v[0] * sv * hh,
-          f.c[1] + f.u[1] * su * hw + f.v[1] * sv * hh,
-          f.c[2] + f.u[2] * su * hw + f.v[2] * sv * hh,
+          f.n[0] * out + f.u[0] * su * f.hu + f.v[0] * sv * f.hv,
+          f.n[1] * out + f.u[1] * su * f.hu + f.v[1] * sv * f.hv,
+          f.n[2] * out + f.u[2] * su * f.hu + f.v[2] * sv * f.hv,
           f.n[0],
           f.n[1],
           f.n[2],

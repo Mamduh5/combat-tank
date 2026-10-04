@@ -9,7 +9,7 @@
  * 1. **Orientation.** The exporter writes a root-node rotation to convert from the authored left-handed space
  *    to glTF's right-handed one. Whether the result lands nose-forward, nose-backward, or mirrored depends on
  *    how Babylon's glTF loader composes that root rotation with the renderer's own yaw. Getting it wrong
- *    type-checks perfectly and produces a tank that drives backwards — which is exactly the V3R defect, and
+ *    type-checks perfectly and produces a tank that drives backwards â€” which is exactly the V3R defect, and
  *    exactly what `tests/client/controls.test.ts` could not catch, because it compared *helper functions* to
  *    each other and never looked at a loaded mesh.
  * 2. **Scale.** The loader measures the model's extent and rescales it to the definition's dimensions. If the
@@ -20,7 +20,18 @@
  * So this boots the real game, pokes the real scene graph, and reports. It asserts rather than screenshots:
  * a screenshot of a mirrored tank still looks like a tank.
  *
- * Usage: `node tools/audit-assets.mjs [--json]`
+ * ## It audits the whole roster, not the default vehicle
+ *
+ * V7 audited one tank and it was correct to: there was only one. V8 has three, and a single-vehicle audit is
+ * now a test of an arbitrary choice â€” the heavy's model could be missing entirely and the audit would still
+ * pass on the medium.
+ *
+ * So the tool boots once and then walks the whole roster, **re-selecting the encounter between vehicles**
+ * through `__combatTank.selectVehicle`. That reuses the real path the player uses rather than building the
+ * scene a second way, which means this also covers the disposal path: a leaked mesh from the previous
+ * vehicle shows up as a wrong mesh count on the next one.
+ *
+ * Usage: `node tools/audit-assets.mjs [--json] [--vehicle <id>]`
  */
 
 import { spawn } from 'node:child_process';
@@ -31,6 +42,17 @@ import { CDP } from './cdp.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WANT_JSON = process.argv.includes('--json');
+
+/**
+ * Audits one vehicle only, when `--vehicle <id>` is passed.
+ *
+ * `null` means the whole roster, which is the default and what CI should run. The flag exists for the case
+ * the tool cannot help with: a developer has found a defect on one tank and wants the answer in ten seconds
+ * rather than after the full walk, which is several minutes under SwiftShader.
+ */
+const VEHICLE_FLAG_INDEX = process.argv.indexOf('--vehicle');
+const ONLY_VEHICLE =
+  VEHICLE_FLAG_INDEX >= 0 ? process.argv[VEHICLE_FLAG_INDEX + 1] ?? null : null;
 
 const CHROME_CANDIDATES = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -128,8 +150,15 @@ const AUDIT_EXPRESSION = `
 
   const scene = g.scene;
   const sim = g.simulation;
-  const visual = g.tankVisual;
+  // The live encounter's model, read through the debug getter rather than a captured value. The V7 name
+  // (g.tankVisual) no longer exists and could not have been trusted anyway: it was captured at boot, so after
+  // the player changed vehicles it would describe the tank they had left.
+  const visual = g.playerVisual;
   const rig = visual.vehicleRig;
+  // Every check is tagged with which vehicle produced it, because a failing run prints all of them and
+  // "hull matches the definition length: FAIL" is not actionable on its own.
+  out.scene.vehicleId = sim.vehicle.definition.id;
+  out.scene.vehicleName = sim.vehicle.definition.displayName;
   // Babylon's Vector3, taken from a live instance rather than assumed importable in this scope.
   const V3 = rig.gun.position.constructor;
 
@@ -264,7 +293,7 @@ const AUDIT_EXPRESSION = `
   const m = hull.getWorldMatrix().m;
   const raw = { x: m[8], y: m[9], z: m[10] };
   // Normalised, and this matters: the row carries the driver's uniform scale, so using it raw produced a
-  // "dot product" of 1.35 — an impossible number that should have been read as a bug in the check, and was.
+  // "dot product" of 1.35 â€” an impossible number that should have been read as a bug in the check, and was.
   const hullLen = Math.hypot(raw.x, raw.y, raw.z) || 1;
   const hullForward = { x: raw.x / hullLen, y: raw.y / hullLen, z: raw.z / hullLen };
   const expectedX = Math.sin(heading);
@@ -302,6 +331,76 @@ const AUDIT_EXPRESSION = `
     Math.abs(barrel.x * expectedX + barrel.z * expectedZ) > 0.6,
     'barrel/hull dot = ' + (barrel.x * expectedX + barrel.z * expectedZ).toFixed(3) +
     ' (turret is traversed, so this is loose by design)');
+
+  // --- 3b. Pivots and grounding, added in V8 ---
+  //
+  // These are per-vehicle in a way the checks above are not, which is exactly why they belong here. A model
+  // with its turret pivot 40 cm to the left of the hull centre *renders* perfectly: the hull is the right
+  // size, faces the right way, and has the right materials. It just slews about the wrong point, so aiming
+  // puts the barrel somewhere other than the reticle. Nothing above would notice.
+  //
+  // Each is measured against the vehicle's *own* definition rather than a fixed number, so the check travels
+  // when a new vehicle is added instead of needing a new tolerance per tank.
+  const hullCentre = rig.hull.getAbsolutePosition();
+  const turretCentre = rig.turret.getAbsolutePosition();
+
+  // Turret pivot: the turret should sit over the hull, roughly centred laterally. Compared against hull
+  // width rather than an absolute metre, because a heavy is 3.5 m wide and a light 2.9 m â€” a check hard-coded
+  // to the medium would fail one and pass the other for the wrong reason.
+  const lateralOffsetM = Math.hypot(turretCentre.x - hullCentre.x, turretCentre.z - hullCentre.z);
+  const lateralTolerance = dims.widthM * 0.25;
+  out.scene.turretPivotOffsetM = Number(lateralOffsetM.toFixed(3));
+  check('turret pivots over the hull, not beside it', lateralOffsetM < lateralTolerance,
+    lateralOffsetM.toFixed(2) + 'm off centre, tolerance ' + lateralTolerance.toFixed(2) +
+    'm (' + (dims.widthM * 100).toFixed(0) + 'cm hull width)');
+
+  // Turret must sit *above* the hull's base, not below it. An inverted turret node reads as plausible in a
+  // screenshot from above and turns the vehicle inside out when the camera drops.
+  check('turret sits above the hull', turretCentre.y >= hullCentre.y,
+    'turret y = ' + turretCentre.y.toFixed(2) + ', hull y = ' + hullCentre.y.toFixed(2));
+
+  // Grounding: the vehicle must be sitting on the terrain, not floating above it or sunk into it. Read from
+  // the running gear rather than the hull origin, because a hull origin is usually at the centre of the tub
+  // and therefore legitimately half a metre off the ground.
+  //
+  // 0.35 m is a deliberately loose bound. Track conforming is an *ease toward* the ground, not a snap, so a
+  // vehicle crossing a slope is briefly airborne by design; what this catches is a model whose wheels are
+  // authored a metre off, which is a real and previously invisible failure.
+  // rig.wheels holds { node, radiusM } records, not bare nodes, so the height is read off w.node.
+const wheelHeights = rig.wheels.map((w) => w.node.getAbsolutePosition().y);
+  const lowestWheelY = wheelHeights.length > 0 ? Math.min(...wheelHeights) : null;
+  // Compared against the model's **own root**, not the simulation's hull position. The asset contract puts
+  // the model origin on the track contact line, and the renderer deliberately places that origin below the
+  // hull position by the ride height (see VehicleVisual.apply) -- so the two differ by design, and comparing
+  // them reports a correctly grounded vehicle as one sunk into the map.
+  const rootY = rig.root.getAbsolutePosition().y;
+  out.scene.lowestWheelY = lowestWheelY === null ? null : Number(lowestWheelY.toFixed(3));
+  out.scene.modelRootY = Number(rootY.toFixed(3));
+  out.scene.simulationHullY = Number(sim.vehicle.state.position.y.toFixed(3));
+  check('the running gear reaches the model origin',
+    lowestWheelY !== null && Math.abs(lowestWheelY - rootY) < 0.35,
+    lowestWheelY === null ? '(no wheels)' :
+      'lowest wheel y = ' + lowestWheelY.toFixed(2) + ' vs model origin y = ' + rootY.toFixed(2) +
+      ' (hull sits at ' + sim.vehicle.state.position.y.toFixed(2) + ', higher by design)');
+
+  // Wheel radius sanity, measured from the model rather than trusted from the definition. A wheel scaled to
+  // half size still spins and still looks like a wheel in a still frame.
+  const wheelRadii = rig.wheels.map((w) => w.radiusM);
+  const meanRadius = wheelRadii.length > 0
+    ? wheelRadii.reduce((a, b) => a + b, 0) / wheelRadii.length
+    : 0;
+  out.scene.meanWheelRadiusM = Number(meanRadius.toFixed(3));
+  check('wheels are a plausible size', meanRadius > 0.2 && meanRadius < dims.widthM * 0.6,
+    'mean radius ' + meanRadius.toFixed(2) + 'm on a ' + dims.widthM.toFixed(2) + 'm wide hull');
+
+  // Muzzle: must be ahead of the gun and above the hull origin, or the flash and the shell both come out of
+  // the wrong place. The muzzle is *simulated* from this node, so an error here is a gameplay error, not a
+  // cosmetic one â€” shells would spawn inside the tank.
+  const muzzleWorld = rig.muzzle.getAbsolutePosition();
+  const muzzleFromGunM = V3.Distance(muzzleWorld, rig.gun.getAbsolutePosition());
+  out.scene.muzzleFromGunM = Number(muzzleFromGunM.toFixed(3));
+  check('the muzzle is at the far end of the barrel', muzzleFromGunM > 0.5,
+    muzzleFromGunM.toFixed(2) + 'm from the gun node');
 
   // --- 4. Materials ---
   //
@@ -391,7 +490,7 @@ const FIRE_EXPRESSION = `
   const check = (name, ok, detail) => out.checks.push({ name, status: ok ? 'pass' : 'fail', detail });
 
   const sim = g.simulation;
-  const visual = g.tankVisual;
+  const visual = g.playerVisual;
 
   // Drive, steer, and fire several rounds: the smallest sequence that exercises engine cross-fade, track
   // conforming, wheel spin, recoil, muzzle effects, and every one-shot sound.
@@ -465,6 +564,81 @@ const FIRE_EXPRESSION = `
   check('shells resolved into impacts', impactTotal > 0, impactTotal + ' impacts');
   check('wheels survived the drive', visual.vehicleRig.wheels.length > 0,
     visual.vehicleRig.wheels.length + ' wheels');
+
+  // --- V8: movement is per-vehicle, so it must be checked against the vehicle's own definition ---
+  //
+  // V7's "the tank moved" is a single hard-coded threshold of 5 m, which is meaningful for the medium and
+  // meaningless for the rest: a heavy at full throttle for four seconds covers a quarter of that, and a light
+  // covers nearly ten times it. So that check passes or fails for reasons that have nothing to do with
+  // whether the pipeline is working.
+  //
+  // What is asserted instead is that the vehicle reaches a sensible fraction of **its own** top speed, and
+  // that its travel is in the direction it is facing. Both travel with the definition, so adding a vehicle
+  // needs no new number here.
+  const powertrain = sim.vehicle.definition.powertrain;
+  const expectedTop = powertrain.maxSpeedMps;
+  out.topSpeedFraction = Number((peakSpeed / expectedTop).toFixed(3));
+
+  // 30%: reachable within four seconds on gentle ground for every vehicle in the roster, and comfortably
+  // above zero â€” so a vehicle whose model, physics or drive force has silently broken reads as a failure
+  // rather than as "it was a heavy".
+  check('the vehicle reached speed against its own top speed',
+    peakSpeed > expectedTop * 0.3,
+    peakSpeed.toFixed(2) + ' m/s reached of ' + expectedTop.toFixed(1) + ' m/s top speed' +
+    ' for ' + sim.vehicle.definition.displayName);
+
+  // Movement must be *forward*. This is the live-scene restatement of the V3R orientation defect: a tank
+  // whose model is yawed 180 degrees renders perfectly and drives backwards, and the only way to see it is
+  // to compare where it went against where it was pointing.
+  const heading = sim.vehicle.state.headingRad;
+  const intendedDir = { x: Math.sin(heading), z: Math.cos(heading) };
+  const displacement = {
+    x: after.position.x - before.position.x,
+    z: after.position.z - before.position.z,
+  };
+  const displacementLength = Math.hypot(displacement.x, displacement.z) || 1;
+  const travelDot =
+    (displacement.x * intendedDir.x + displacement.z * intendedDir.z) / displacementLength;
+  out.travelDot = Number(travelDot.toFixed(4));
+  // > 0.5 is within 60 degrees. Deliberately loose: the drive includes a 30-tick turn, so the net heading by
+  // the end is not the opening one. This is a "not backwards" check, not a trajectory reconstruction.
+  check('the tank drove forwards, not backwards', travelDot > 0.5,
+    'travel/intent dot = ' + travelDot.toFixed(3) + ' over ' + moved.toFixed(1) + 'm');
+
+  // --- V8: destruction renders ---
+  //
+  // The wreck state is the one visual path that only runs at the end of a battle, so it is the one most
+  // likely to have rotted unnoticed: every other check in this tool passes on a vehicle that would render
+  // perfectly right up until it died. setDestroyed is applied to the *model*, so a vehicle whose wreck
+  // path throws takes out the frame loop rather than just failing a check.
+  //
+  // It is driven through the **opponent's** model, which is the one that is ever wrecked, and applied and
+  // then cleared so the tool leaves the scene as it found it.
+  const target = sim.target;
+  const targetVisual = g.targetVisual;
+  let destructionDetail = 'no opponent in this encounter';
+  if (target && targetVisual) {
+    const hpBefore = target.damage.hitPoints;
+    try {
+      targetVisual.setDestroyed(true);
+      g.scene.render();
+      targetVisual.setDestroyed(false);
+      g.scene.render();
+      destructionDetail =
+        'wrecked ' + target.definition.displayName + ' at ' + hpBefore + '/' +
+        target.definition.survivability.hitPoints + ' hit points, then restored';
+    } catch (error) {
+      destructionDetail = 'setDestroyed threw: ' + String((error && error.message) || error);
+    }
+    check('the wreck visual applies and clears without throwing',
+      !destructionDetail.includes('threw') && errors.length === 0,
+      destructionDetail + (errors.length > 0 ? ' | errors: ' + errors.join(' ; ') : ''));
+    out.destruction = { observed: !destructionDetail.includes('threw'), targetHitPoints: hpBefore };
+  } else {
+    // Not a failure: a solo encounter has nothing to wreck. Recorded so the absence is visible in the report
+    // rather than looking like a check that was quietly skipped.
+    out.destruction = { observed: null, reason: 'no opponent' };
+  }
   check('no uncaught errors while driving and firing', errors.length === 0, errors.join(' | ') || 'none');
 
   return JSON.stringify(out);
@@ -573,37 +747,135 @@ async function main() {
     // generous on purpose: a too-short wait reports a scale failure for a model that is merely not ready yet.
     await sleep(5000);
 
-    const audit = await cdp.send('Runtime.evaluate', {
-      expression: AUDIT_EXPRESSION,
-      returnByValue: true,
-    });
-    if (audit.exceptionDetails) {
-      throw new Error(`The audit itself threw: ${JSON.stringify(audit.exceptionDetails).slice(0, 600)}`);
-    }
-    const auditResult = JSON.parse(audit.result.value);
-    allChecks.push(...auditResult.checks);
+    /**
+     * Runs both audit passes against whatever vehicle is currently loaded.
+     *
+     * Split out because the roster walk calls this once per vehicle, and the pass *is* the unit of work â€”
+     * duplicating the two `Runtime.evaluate` blocks inside the loop would mean a change to how a pass is
+     * reported had to be made twice.
+     */
+    async function auditCurrentVehicle() {
+      const audit = await cdp.send('Runtime.evaluate', {
+        expression: AUDIT_EXPRESSION,
+        returnByValue: true,
+      });
+      if (audit.exceptionDetails) {
+        throw new Error(`The audit itself threw: ${JSON.stringify(audit.exceptionDetails).slice(0, 600)}`);
+      }
+      const auditResult = JSON.parse(audit.result.value);
 
-    // Audio buffers decode asynchronously, so the firing pass runs after a further pause.
-    await sleep(2000);
-    const fire = await cdp.send('Runtime.evaluate', {
-      expression: FIRE_EXPRESSION,
+      // Audio buffers decode asynchronously, so the firing pass runs after a further pause.
+      await sleep(2000);
+      const fire = await cdp.send('Runtime.evaluate', {
+        expression: FIRE_EXPRESSION,
+        returnByValue: true,
+      });
+      if (fire.exceptionDetails) {
+        // The full description matters: `exceptionDetails.text` is just "Uncaught" for an error thrown inside
+        // minified code, and the message is the only thing that identifies which call actually failed.
+        const detail = fire.exceptionDetails.exception?.description ?? JSON.stringify(fire.exceptionDetails);
+        throw new Error(`The firing pass threw: ${String(detail).slice(0, 900)}`);
+      }
+      const fireResult = JSON.parse(fire.result.value);
+      return { auditResult, fireResult };
+    }
+
+    /**
+     * Re-points the running game at one vehicle, through the same call the player's selector uses.
+     *
+     * Going through `selectVehicle` rather than building a scene per vehicle is deliberate: it audits the
+     * real switching path, including disposal. A vehicle whose predecessor leaks meshes shows up as an
+     * inflated mesh count on the *next* vehicle, which is exactly the defect the roster introduced and the
+     * one a fresh-scene audit would be structurally unable to see.
+     *
+     * Mirror matchups (`x` against `x`) so that the destruction check always has an opponent, whatever the
+     * vehicle under test.
+     */
+    async function selectVehicle(vehicleId) {
+      const switched = await cdp.send('Runtime.evaluate', {
+        expression:
+          `globalThis.__combatTank.selectVehicle(${JSON.stringify(vehicleId)}, ` +
+          `${JSON.stringify(vehicleId)}).then(() => 'ok', (e) => 'failed: ' + String((e && e.message) || e))`,
+        returnByValue: true,
+        awaitPromise: true,
+      });
+      if (switched.result.value !== 'ok') {
+        pageErrors.push(`selectVehicle(${vehicleId}): ${switched.result.value}`);
+        return false;
+      }
+      // Model loading and scene settling under SwiftShader. Generous, because a too-short wait here reads as
+      // a scale failure on a model that is merely not loaded yet â€” a false failure that trains people to
+      // ignore the tool.
+      await sleep(4000);
+      return true;
+    }
+
+    // --- The roster walk ---
+    //
+    // Read from the page rather than from `src/shared/roster.ts`, which this Node tool cannot import. That
+    // is a feature: the list of vehicles to audit is whatever the *game* says it has, so a vehicle added to
+    // the roster is audited on the next run with no second list to keep in step.
+    const rosterResult = await cdp.send('Runtime.evaluate', {
+      expression:
+        'JSON.stringify(globalThis.__combatTank.roster.map((r) => ({ id: r.id, name: r.displayName })))',
       returnByValue: true,
     });
-    if (fire.exceptionDetails) {
-      // The full description matters: `exceptionDetails.text` is just "Uncaught" for an error thrown inside
-      // minified code, and the message is the only thing that identifies which call actually failed.
-      const detail = fire.exceptionDetails.exception?.description ?? JSON.stringify(fire.exceptionDetails);
-      throw new Error(`The firing pass threw: ${String(detail).slice(0, 900)}`);
+    if (rosterResult.exceptionDetails) {
+      throw new Error('The game exposed no roster to audit.');
     }
-    const fireResult = JSON.parse(fire.result.value);
-    allChecks.push(...fireResult.checks);
+    const roster = JSON.parse(rosterResult.result.value);
+    const vehicles = ONLY_VEHICLE === null ? roster : roster.filter((v) => v.id === ONLY_VEHICLE);
+    if (vehicles.length === 0) {
+      throw new Error(
+        `--vehicle ${ONLY_VEHICLE} matched nothing. The roster has: ${roster.map((v) => v.id).join(', ')}`,
+      );
+    }
+
+    const scenes = [];
+    for (const vehicle of vehicles) {
+      process.stdout.write(`  auditing ${vehicle.id}...\n`);
+      if (!(await selectVehicle(vehicle.id))) {
+        continue;
+      }
+      const { auditResult, fireResult } = await auditCurrentVehicle();
+      allChecks.push(...auditResult.checks, ...fireResult.checks);
+      scenes.push({ ...auditResult.scene, firing: fireResult });
+    }
+
+    // --- Disposal ---
+    //
+    // Checked once, after the walk, by counting the meshes left in the scene. Two encounters' worth of tanks
+    // standing in the same place is invisible in a structural audit â€” every individual tank is perfectly
+    // valid â€” and permanent, because dropping the JavaScript reference frees nothing until the mesh is
+    // disposed. Read at the end, which is exactly the state where a leak would have accumulated the most.
+    const meshesNow = await cdp.send('Runtime.evaluate', {
+      expression: 'globalThis.__combatTank.scene.meshes.length',
+      returnByValue: true,
+    });
+    const rigMeshes = await cdp.send('Runtime.evaluate', {
+      expression: 'globalThis.__combatTank.playerVisual.vehicleRig.meshes.length',
+      returnByValue: true,
+    });
+    const meshTotal = meshesNow.result.value;
+    const rigCount = rigMeshes.result.value;
+    // Two rigs' worth, plus a generous allowance for terrain and props. The margin is deliberately loose: the
+    // property being asserted is "switching five times does not leave five tanks behind", and an exact bound
+    // would turn a prop-count change into a false alarm.
+    const disposalLimit = rigCount * 2 + 200;
+    allChecks.push({
+      name: 'switching vehicles disposes the previous encounter',
+      status: meshTotal <= disposalLimit ? 'pass' : 'fail',
+      detail:
+        `${meshTotal} meshes in the scene after ${vehicles.length} vehicle switch(es); ` +
+        `one rig holds ${rigCount}, so the limit is ${disposalLimit}`,
+    });
 
     // --- Report ---
     const failed = allChecks.filter((c) => c.status === 'fail');
     const report = {
       passed: failed.length === 0 && pageErrors.length === 0,
-      scene: auditResult.scene,
-      firing: fireResult,
+      vehicles: vehicles.map((v) => v.id),
+      scenes,
       checks: allChecks,
       pageErrors,
     };
@@ -613,13 +885,17 @@ async function main() {
     if (WANT_JSON) {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     } else {
-      process.stdout.write('\nV7 asset pipeline audit\n\n');
+      process.stdout.write(`\nAsset pipeline audit (${vehicles.length} vehicle(s))\n\n`);
       for (const c of allChecks) {
         process.stdout.write(`  [${c.status.toUpperCase()}] ${c.name}\n         ${c.detail}\n`);
       }
-      process.stdout.write('\n  Scene:\n');
-      for (const [k, v] of Object.entries(auditResult.scene)) {
-        process.stdout.write(`    ${k} = ${JSON.stringify(v)}\n`);
+      process.stdout.write('\n  Per-vehicle measurements:\n');
+      for (const scene of scenes) {
+        process.stdout.write(`\n    ${scene.vehicleName ?? scene.vehicleId} (${scene.vehicleId})\n`);
+        for (const [k, v] of Object.entries(scene)) {
+          if (k === 'firing' || k === 'vehicleId' || k === 'vehicleName') continue;
+          process.stdout.write(`      ${k} = ${JSON.stringify(v)}\n`);
+        }
       }
       if (pageErrors.length > 0) {
         process.stdout.write('\n  Page errors:\n');
@@ -641,3 +917,5 @@ main().catch((error) => {
   process.stderr.write(`\nasset audit failed to run: ${error.message}\n`);
   process.exitCode = 1;
 });
+
+

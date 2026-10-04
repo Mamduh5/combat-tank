@@ -1,4 +1,4 @@
-/**
+﻿/**
  * V7 combat audio.
  *
  * ## What changed from V4, and why
@@ -10,14 +10,14 @@
  *
  * So the sounds are now **rendered offline to WAV assets** (`tools/build-assets.mjs`, provenance recorded in
  * `docs/audio-design.md`) and loaded here as `AudioBuffer`s. The runtime's job is placement, mixing, and
- * layering — things a baked sample cannot do for itself.
+ * layering â€” things a baked sample cannot do for itself.
  *
  * ## The three structural ideas
  *
  * **Layers, not one-shots.** The engine is three separate loops (idle / load / full) cross-faded by throttle
  * and speed. Pitch alone gives a rising *tone*; cross-fading between loops recorded at different loads gives
  * a rising *effort*, which is what the brief asks the player to hear: "the tank is working harder when I
- * ask more from it". The gun report is likewise four layers placed differently — the crack is directional
+ * ask more from it". The gun report is likewise four layers placed differently â€” the crack is directional
  * and bright, the tail arrives late and is mostly low, and baking them together would force one filter over a
  * sound that needs two.
  *
@@ -29,7 +29,7 @@
  *
  * **Bounded voices.** One-shots play under a ceiling on simultaneous voices, not an unbounded pile. A shot in
  * a long firefight, or several impacts in one frame, must not stack into a dozen overlapping gunfires louder
- * than intended — and they must not accumulate live nodes either, which is why `OneShotVoices` disconnects
+ * than intended â€” and they must not accumulate live nodes either, which is why `OneShotVoices` disconnects
  * each source on `ended` and tracks how many are live.
  *
  * ## Browser constraints
@@ -41,6 +41,7 @@
 
 
 import { assetUrl, SOUNDS } from '../assets/asset-manifest.js';
+import type { VehicleAudioProfile } from '../../shared/vehicle-definition.js';
 
 /** Tuning for the audio graph. Gains are linear and small; the limiter catches the peaks. */
 export const AUDIO_TUNING = {
@@ -69,7 +70,7 @@ export const AUDIO_TUNING = {
    *
    * Inverse-square would be physically right and inaudibly wrong: it drops off so fast that a shot at 100 m
    * disappears, leaving the player unsure whether their gun fired at all. A gentle linear falloff keeps
-   * distant events present but clearly quieter — what "far away" sounds like, without losing the information.
+   * distant events present but clearly quieter â€” what "far away" sounds like, without losing the information.
    */
   distantFloor: 0.18,
 
@@ -117,14 +118,24 @@ export interface EngineInput {
   readonly speedMps: number;
   /** The vehicle's top speed, so the fraction is scale-free. */
   readonly maxSpeedMps: number;
-  /** The driver's demand, −1..1. This is what makes the engine respond to *effort*, not just motion. */
+  /** The driver's demand, âˆ’1..1. This is what makes the engine respond to *effort*, not just motion. */
   readonly throttle: number;
-  /** Longitudinal acceleration, m/s². Positive under power, negative braking. */
+  /** Longitudinal acceleration, m/sÂ². Positive under power, negative braking. */
   readonly accelMps2: number;
   /** True while the vehicle is stationary or nearly so. */
   readonly stopped: boolean;
   /** Overall level multiplier, for a destroyed or silenced vehicle. */
   readonly gainScale: number;
+  /**
+   * This vehicle's audio character, added in V8.
+   *
+   * Carried here rather than passed alongside because it belongs with the motion it describes: the engine
+   * loop is the same recording for every vehicle, and what makes a heavy sound heavy is that its loop is
+   * played *lower* while it is working *harder*. Splitting the two across two parameters would invite a
+   * caller to pair one vehicle's sound with another's motion, which is precisely the bug this field exists to
+   * make impossible.
+   */
+  readonly audio: VehicleAudioProfile;
 }
 /**
  * A continuously playing loop, built from one or more buffers.
@@ -135,7 +146,7 @@ export interface EngineInput {
  *
  * ## Why pitch is *also* modulated
  *
- * The cross-fade between idle/load/full carries the *character* of the engine — the harmonics, the
+ * The cross-fade between idle/load/full carries the *character* of the engine â€” the harmonics, the
  * roughness, the combustion lumpiness. But a real engine also revs. So the loop's `playbackRate` is nudged
  * with speed on top of the cross-fade. A small range only: pushing `playbackRate` far shifts every partial
  * and turns the engine into a chipmunk, whereas a gentle rise reads as revving.
@@ -199,8 +210,10 @@ class LoopVoice {
    *   while the *character* changes
    * @param pitchScale playback-rate multiplier
    * @param dtSeconds elapsed time, so the cross-fade is frame-rate independent
+   * @param gainScale overall level multiplier, added in V8 so a vehicle's own volume character applies.
+   *   Separate from `weights`, which balance the layers *against each other* and sum to about 1.
    */
-  update(weights: readonly number[], pitchScale: number, dtSeconds: number): void {
+  update(weights: readonly number[], pitchScale: number, dtSeconds: number, gainScale = 1): void {
     const k = Math.min(1, AUDIO_TUNING.engineFadeRate * Math.max(0, dtSeconds));
     for (let i = 0; i < this.gains.length; i += 1) {
       const current = this.gains[i]!.gain.value;
@@ -213,7 +226,7 @@ class LoopVoice {
        * layers; `baseGains` is how loud the loop is overall. Multiplying them is what makes both mean
        * something.
        */
-      const target = (weights[i] ?? 0) * this.baseGains[i];
+      const target = (weights[i] ?? 0) * this.baseGains[i] * gainScale;
       this.gains[i]!.gain.value = current + (target - current) * k;
     }
     this.level = this.gains[0]?.gain.value ?? 0;
@@ -298,7 +311,7 @@ function enginePitchScale(input: EngineInput): number {
  * An `AudioBufferSourceNode` is **single-use**. The spec says its `buffer` may be assigned once and its
  * `start()` called once, and the first restriction turns out to be absolute: once a non-null buffer has been
  * assigned, setting `buffer = null` does *not* make the node reusable. Assigning a second buffer throws
- * `InvalidStateError` — verified directly rather than assumed, with the probe kept in
+ * `InvalidStateError` â€” verified directly rather than assumed, with the probe kept in
  * `tools/webaudio-semantics-probe.js`:
  *
  * | Sequence | Result |
@@ -310,14 +323,14 @@ function enginePitchScale(input: EngineInput): number {
  * | node already ended, reassign | **throws** |
  *
  * A recycled node therefore can never carry a second sound, however carefully it is reset. The pool's only
- * possible behaviour was to exhaust itself and then throw — which it did, from inside the render loop's fire
+ * possible behaviour was to exhaust itself and then throw â€” which it did, from inside the render loop's fire
  * handler, stopping every frame. That is the "crash after five seconds" the owner reported: a gun report claims
  * four voices (crack, blast, thump, tail), so an eight-voice pool was spent in two shots.
  *
  * Creating a node per shot is not the expensive operation pooling was meant to avoid. A
  * `AudioBufferSourceNode` is a thin handle over the already-decoded `AudioBuffer`, and the sound data is
  * uploaded once at decode time and shared. Once `onended` fires and the node is disconnected it is garbage.
- * The genuinely expensive parts of this graph — the decoded buffers, the limiter, the persistent gains — are
+ * The genuinely expensive parts of this graph â€” the decoded buffers, the limiter, the persistent gains â€” are
  * all still shared.
  *
  * What pooling *did* buy is kept, because it was the useful half: a ceiling on simultaneous voices, so a
@@ -332,15 +345,17 @@ class OneShotVoices {
   /**
    * Ceiling on simultaneous one-shots.
    *
-   * Eight, matching the pool V7 used, so the mix is unchanged — but now a ceiling rather than a supply.
+   * Eight, matching the pool V7 used, so the mix is unchanged â€” but now a ceiling rather than a supply.
    */
   static readonly MAX_CONCURRENT = 8;
 
   /**
    * Plays one buffer once.
    *
-   * @param destination the bus to feed — the plain one for the player's own sounds, the spatial one otherwise
+   * @param destination the bus to feed â€” the plain one for the player's own sounds, the spatial one otherwise
    * @param delaySeconds start offset, used to place the gun report's tail after the crack
+   * @param pitch playback-rate multiplier, added in V8 so a heavy's report can be lower than a light's
+   *   from the same recording. `undefined` leaves the buffer at its authored rate.
    * @returns whether it started; `false` means the voice cap was reached and it was dropped
    */
   play(
@@ -349,6 +364,7 @@ class OneShotVoices {
     level: number,
     destination: AudioNode,
     delaySeconds = 0,
+    pitch = 1,
   ): boolean {
     if (this.live >= OneShotVoices.MAX_CONCURRENT) {
       // Dropping the newest is right here. The loudest events are gunfire and impacts, and a cap that
@@ -360,6 +376,11 @@ class OneShotVoices {
     // A fresh node every time, which is the only form the spec permits.
     const source = context.createBufferSource();
     source.buffer = buffer;
+    // Set before `start`, because changing `playbackRate` after playback begins is not allowed â€” the
+    // spec throws `InvalidStateError`, which is the same failure the shared-node bug produced.
+    if (pitch !== 1) {
+      source.playbackRate.value = pitch;
+    }
 
     const gain = context.createGain();
     gain.gain.value = level;
@@ -372,7 +393,7 @@ class OneShotVoices {
     }
 
     // The single cleanup point. Disconnecting here rather than relying on GC is what stops a long firefight
-    // accumulating live nodes — the failure the old pool was meant to prevent, now prevented for real.
+    // accumulating live nodes â€” the failure the old pool was meant to prevent, now prevented for real.
     source.onended = () => {
       this.live -= 1;
       try {
@@ -432,7 +453,7 @@ export class CombatAudio {
    * Starts the audio graph and loads the sound assets. Must be called from a user gesture.
    *
    * Safe to call repeatedly. Browsers may hand back a context that exists but is still suspended, so this
-   * also resumes it — otherwise the first click after a page load produces silence, which reads as broken.
+   * also resumes it â€” otherwise the first click after a page load produces silence, which reads as broken.
    *
    * The graph is built *before* the fetch, so audio is playable the moment a buffer lands rather than only
    * after every file has arrived.
@@ -537,7 +558,7 @@ export class CombatAudio {
    * Builds the continuous voices.
    *
    * Each is constructed only from buffers that actually loaded, so a missing engine loop produces a quieter
-   * game rather than an exception on the first frame — the right failure mode for an asset problem.
+   * game rather than an exception on the first frame â€” the right failure mode for an asset problem.
    */
   private buildLoops(): void {
     const context = this.context;
@@ -554,7 +575,7 @@ export class CombatAudio {
        * Equal base gains, multiplied by the class-level level.
        *
        * The `engineGain` factor is load-bearing and was previously missing entirely. The three engine layers
-       * are cross-faded to *sum* to 1, so without it the engine bed ran at unity — 0.92 measured at idle —
+       * are cross-faded to *sum* to 1, so without it the engine bed ran at unity â€” 0.92 measured at idle â€”
        * instead of the authored 0.3. Combined with a track loop and a turret servo at similar unity levels,
        * the continuous bed alone reached an RMS around 0.19 and a crest factor near 2.6, which is the
        * broadband, near-constant-amplitude signature of the "broken television" the owner heard.
@@ -632,8 +653,8 @@ export class CombatAudio {
    *
    * ## Why the falloff is gentle
    *
-   * See `AUDIO_TUNING.distantFloor`. An enemy shot at 150 m must still be *audible* — that is the entire
-   * point of spatial audio in a game where you cannot see them — so the curve never reaches true silence
+   * See `AUDIO_TUNING.distantFloor`. An enemy shot at 150 m must still be *audible* â€” that is the entire
+   * point of spatial audio in a game where you cannot see them â€” so the curve never reaches true silence
    * until the sound is at the edge of the map.
    */
   private spatialParams(
@@ -662,7 +683,7 @@ export class CombatAudio {
    *
    * Flat-ground and ignoring height, deliberately, to match `spatialParams` exactly. A separate measure that
    * included Y would give a gun at your feet a different arrival delay from the same gun panned across the
-   * field — two answers to one question, and the mismatch would be audible as the gun moved over uneven
+   * field â€” two answers to one question, and the mismatch would be audible as the gun moved over uneven
    * ground.
    */
   private distanceFrom(position: AudioPosition, listener: ListenerPose): number {
@@ -678,7 +699,12 @@ export class CombatAudio {
   private play(
     buffer: AudioBuffer | undefined,
     gain: number,
-    options: { panning?: { pan: number; gain: number }; delaySeconds?: number } = {},
+    options: {
+      panning?: { pan: number; gain: number };
+      delaySeconds?: number;
+      /** Playback-rate multiplier. Added in V8 for per-vehicle gun character. */
+      pitch?: number;
+    } = {},
   ): void {
     const context = this.context;
     const voices = this.voices;
@@ -699,9 +725,9 @@ export class CombatAudio {
       const panner = context.createStereoPanner();
       panner.pan.value = panning.pan;
       panner.connect(this.spatialBus ?? this.bus!);
-      voices.play(context, buffer, level, panner, options.delaySeconds ?? 0);
+      voices.play(context, buffer, level, panner, options.delaySeconds ?? 0, options.pitch);
     } else {
-      voices.play(context, buffer, level, this.bus!, options.delaySeconds ?? 0);
+      voices.play(context, buffer, level, this.bus!, options.delaySeconds ?? 0, options.pitch);
     }
   }
 
@@ -711,27 +737,45 @@ export class CombatAudio {
    * A single gunshot recording is a compromise: the loud transient that reads as "close" also masks everything
    * else. Layering instead lets each part do one job. The crack is the supersonic snap, nearly instantaneous
    * and the loudest. The blast is the muzzle shock, slower and broader. The thump is the low body that carries
-   * weight. The tail arrives late — distance is conveyed as much by *when* a sound reaches you as by how quiet
+   * weight. The tail arrives late â€” distance is conveyed as much by *when* a sound reaches you as by how quiet
    * it is, so the extra delay is doing as much work as the attenuation.
    *
    * The tail's delay is scaled by the source's distance rather than applied flat. A gun on the far side of the
    * map should arrive noticeably later than one downrange; a constant delay would read as a mix error instead.
    */
-  gunFire(listener: ListenerPose, position: AudioPosition): void {
+  gunFire(listener: ListenerPose, position: AudioPosition, voice?: VehicleAudioProfile): void {
     const panning = this.spatialParams(position, listener);
     const distanceM = this.distanceFrom(position, listener);
     // About 3 ms per metre, capped. Real sound-speed delay over 300 m is nearly a second, which is *correct*
     // but sounds like a bug; the cap keeps the effect while staying responsive.
     const delaySeconds = Math.min(distanceM / 340, 0.55);
 
-    // The crack, blast, and thump start together — they share the muzzle event — but not quite: the low
+    // Per-vehicle character, from `VehicleDefinition.audio`. Optional so a caller that has no profile â€” a
+    // diagnostic, say â€” still gets the authored V7 mix rather than silence.
+    const gain = voice === undefined ? 1 : voice.gunGainScale;
+    const pitch = voice === undefined ? 1 : voice.gunPitchScale;
+
+    // The crack, blast, and thump start together â€” they share the muzzle event â€” but not quite: the low
     // thump is given a few milliseconds of its own lead so the sound has an attack rather than a click.
-    this.play(this.sounds.gunCrack, AUDIO_TUNING.gunCrackGain, { panning, delaySeconds });
-    this.play(this.sounds.gunBlast, AUDIO_TUNING.gunBlastGain, { panning, delaySeconds: delaySeconds + 0.006 });
-    this.play(this.sounds.gunThump, AUDIO_TUNING.gunThumpGain, { panning, delaySeconds: delaySeconds + 0.014 });
-    this.play(this.sounds.gunTail, AUDIO_TUNING.gunThumpGain * 0.6, {
+    this.play(this.sounds.gunCrack, AUDIO_TUNING.gunCrackGain * gain, {
+      panning,
+      delaySeconds,
+      pitch,
+    });
+    this.play(this.sounds.gunBlast, AUDIO_TUNING.gunBlastGain * gain, {
+      panning,
+      delaySeconds: delaySeconds + 0.006,
+      pitch,
+    });
+    this.play(this.sounds.gunThump, AUDIO_TUNING.gunThumpGain * gain, {
+      panning,
+      delaySeconds: delaySeconds + 0.014,
+      pitch,
+    });
+    this.play(this.sounds.gunTail, AUDIO_TUNING.gunThumpGain * 0.6 * gain, {
       panning,
       delaySeconds: delaySeconds + AUDIO_TUNING.gunTailDelaySeconds + distanceM / 340,
+      pitch,
     });
   }
 
@@ -776,7 +820,7 @@ export class CombatAudio {
    * ## How the engine's *load* is derived
    *
    * The brief's requirement is that the player hears the tank "working harder when I ask more from it", so
-   * throttle is the primary input. Speed is secondary — a tank coasting at full speed is not working hard,
+   * throttle is the primary input. Speed is secondary â€” a tank coasting at full speed is not working hard,
    * and one flooring it from rest is. Acceleration adds a small positive bias, because a hard acceleration is
    * the moment of maximum load.
    *
@@ -794,7 +838,12 @@ export class CombatAudio {
       return;
     }
 
-    this.playerEngine?.update(this.engineWeights(player), enginePitchScale(player), dtSeconds);
+    this.playerEngine?.update(
+      this.engineWeights(player),
+      enginePitchScale(player) * player.audio.enginePitchScale,
+      dtSeconds,
+      player.audio.engineGainScale,
+    );
 
     if (this.opponentEngine !== null) {
       if (opponent === null || opponent.gainScale <= 0) {
@@ -802,32 +851,48 @@ export class CombatAudio {
         this.opponentEngine.update([0, 0, 0], 1, dtSeconds);
       } else {
         const weights = this.engineWeights(opponent).map((w) => w * opponent.gainScale);
-        this.opponentEngine.update(weights, enginePitchScale(opponent), dtSeconds);
+        this.opponentEngine.update(
+          weights,
+          enginePitchScale(opponent) * opponent.audio.enginePitchScale,
+          dtSeconds,
+          opponent.audio.engineGainScale,
+        );
       }
     }
-
 
     if (this.trackLoop !== null) {
       // Track volume follows speed closely, so coming to a stop is an audible event. The `LoopVoice.update`
       // easing already smooths the transition, so the target is set directly here rather than re-eased.
       const fraction = speedFraction(player);
       const target = player.stopped ? 0 : Math.min(1, fraction * 1.35);
-      this.trackLoop.update([target], 0.75 + fraction * 0.45, dtSeconds);
+      this.trackLoop.update(
+        [target],
+        0.75 + fraction * 0.45,
+        dtSeconds,
+        player.audio.trackGainScale,
+      );
     }
 
     if (this.turretLoop !== null) {
-      // Silent unless actually traversing, so the servo is a cue rather than a constant.
+      // Silent unless actually traversing, so the servo is a cue rather than a constant. This loop is the
+      // player's own, so it takes the player's profile: a light's fast turret is meant to be audible
+      // precisely where the player can hear it.
       const moving = Math.min(1, Math.abs(turretTraverseRateDegPerSec) / 30);
       const k = Math.min(1, AUDIO_TUNING.turretFadeRate * Math.max(0, dtSeconds));
       const next = this.turretLoop.level + (moving - this.turretLoop.level) * k;
-      this.turretLoop.update([next], 0.85 + moving * 0.3, dtSeconds);
+      this.turretLoop.update(
+        [next],
+        0.85 + moving * 0.3,
+        dtSeconds,
+        player.audio.turretGainScale,
+      );
     }
   }
 
   /** The cross-fade weights for the three engine loops, from throttle, speed, and acceleration. */
   private engineWeights(input: EngineInput): number[] {
     const speed = speedFraction(input);
-    // Throttle dominates. Reverse counts as effort too — asking the tank to back up is work.
+    // Throttle dominates. Reverse counts as effort too â€” asking the tank to back up is work.
     const effort = Math.min(1, Math.abs(input.throttle));
     // A stationary tank under power is working harder than a moving one coasting, so acceleration biases up.
     const accelBias = Math.max(0, Math.min(0.2, input.accelMps2 / 12));
@@ -874,7 +939,7 @@ export class CombatAudio {
   /**
    * One-shots currently sounding.
    *
-   * Exposed for the runtime gate, which asserts this stays bounded — the V7 failure it replaces presented as
+   * Exposed for the runtime gate, which asserts this stays bounded â€” the V7 failure it replaces presented as
    * sources accumulating without limit and eventually throwing, and a plain count catches both.
    */
   get activeVoiceCount(): number {
@@ -905,7 +970,7 @@ export class CombatAudio {
    * Master volume, 0..1.
    *
    * Multiplies the tuned master level rather than replacing it, so 1.0 means "the balance as authored" and
-   * the control is relative — which is what a player expects, and it keeps the limiter's headroom intact at
+   * the control is relative â€” which is what a player expects, and it keeps the limiter's headroom intact at
    * every setting rather than only at the default.
    */
   get volume(): number {

@@ -150,7 +150,7 @@ const poseScript = `
 
   tank.reset({ x: cfg.x, y: field.terrain.heightAt(cfg.x, cfg.z), z: cfg.z }, cfg.heading);
   for (let i = 0; i < 40; i += 1) sim.advance(1 / 60);
-  g.tankVisual.apply(tank.state, tank.turretState, 1 / 60);
+  g.playerVisual.apply(tank.state, tank.turretState, 1 / 60);
 
   // The contact line is the track's *lowest* point, so each segment contributes one gap: its lowest
   // rendered vertex against the terrain directly beneath it. Taking the max over every vertex instead
@@ -340,7 +340,7 @@ const driveScript = `
   for (let frame = 0; frame < cfg.frames; frame += 1) {
     // One fixed 60 Hz tick plus one render, which is exactly what the real frame loop does per frame.
     sim.advance(1 / 60, drive);
-    g.tankVisual.apply(tank.state, tank.turretState, 1 / 60);
+    g.playerVisual.apply(tank.state, tank.turretState, 1 / 60);
     // The contact line is each segment's LOWEST vertex, so the gap is measured per segment rather
     // than over every vertex. Taking the max over all of them would report the top of the track slab —
     // about 1.08 m up — and call it daylight under the vehicle, which is the mistake this script made
@@ -629,5 +629,6 @@ main().catch((error) => {
   process.stderr.write(`FAILED: ${error.stack ?? error.message}\n`);
   process.exit(1);
 });
+
 
 

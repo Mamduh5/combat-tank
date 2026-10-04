@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   createMainGunState,
   isGunLoaded,
@@ -11,7 +11,7 @@ import { createTurretState, gunDirection } from '../../src/core/vehicle/turret.j
 import { Simulation, TICK_DT_SECONDS } from '../../src/core/sim/world.js';
 import { makeInput } from '../../src/shared/input.js';
 import { vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * Gun and reload tests.
@@ -35,9 +35,9 @@ describe('reload cycle', () => {
 
   it('takes the configured reload duration to become loaded again', () => {
     const state = createMainGunState();
-    const reloadSeconds = PLACEHOLDER_TANK.mainGun.reloadSeconds;
+    const reloadSeconds = CT_MEDIUM.mainGun.reloadSeconds;
 
-    tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
     expect(state.loadState).toBe('reloading');
 
     // Advance to just before the reload completes.
@@ -56,7 +56,7 @@ describe('reload cycle', () => {
   });
 
   it('uses a different duration when the definition changes', () => {
-    const definition = { ...PLACEHOLDER_TANK, mainGun: { ...PLACEHOLDER_TANK.mainGun, reloadSeconds: 1 } };
+    const definition = { ...CT_MEDIUM, mainGun: { ...CT_MEDIUM.mainGun, reloadSeconds: 1 } };
     const state = createMainGunState();
 
     tryFire(state, definition, TRUNNION, createTurretState(), 0);
@@ -68,10 +68,10 @@ describe('reload cycle', () => {
 
   it('reports reload progress from zero to one', () => {
     const state = createMainGunState();
-    const reloadSeconds = PLACEHOLDER_TANK.mainGun.reloadSeconds;
+    const reloadSeconds = CT_MEDIUM.mainGun.reloadSeconds;
     expect(reloadProgress(state, reloadSeconds)).toBe(1);
 
-    tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
     expect(reloadProgress(state, reloadSeconds)).toBeCloseTo(0, 2);
 
     for (let i = 0; i < Math.ceil((reloadSeconds / 2) / DT); i += 1) {
@@ -86,7 +86,7 @@ describe('reload cycle', () => {
 describe('firing', () => {
   it('produces a shot when loaded', () => {
     const state = createMainGunState();
-    const muzzle = tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    const muzzle = tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
 
     expect(muzzle).not.toBeNull();
     expect(state.shotsFired).toBe(1);
@@ -94,22 +94,22 @@ describe('firing', () => {
 
   it('refuses to fire while reloading, and does not count the attempt', () => {
     const state = createMainGunState();
-    tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
 
     // Holding the trigger down during a reload must not queue rounds or shorten the reload.
     for (let i = 0; i < 60; i += 1) {
-      expect(tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0)).toBeNull();
+      expect(tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0)).toBeNull();
     }
     expect(state.shotsFired).toBe(1);
   });
 
   it('does not restart the reload when a request is refused', () => {
     const state = createMainGunState();
-    tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
 
-    const halfway = Math.ceil((PLACEHOLDER_TANK.mainGun.reloadSeconds / 2) / DT);
+    const halfway = Math.ceil((CT_MEDIUM.mainGun.reloadSeconds / 2) / DT);
     for (let i = 0; i < halfway; i += 1) {
-      tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+      tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
       updateMainGun(state, DT);
     }
 
@@ -122,13 +122,13 @@ describe('firing', () => {
 
   it('fires again once the reload completes', () => {
     const state = createMainGunState();
-    tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0);
+    tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0);
 
-    for (let i = 0; i < Math.ceil(PLACEHOLDER_TANK.mainGun.reloadSeconds / DT) + 1; i += 1) {
+    for (let i = 0; i < Math.ceil(CT_MEDIUM.mainGun.reloadSeconds / DT) + 1; i += 1) {
       updateMainGun(state, DT);
     }
 
-    expect(tryFire(state, PLACEHOLDER_TANK, TRUNNION, createTurretState(), 0)).not.toBeNull();
+    expect(tryFire(state, CT_MEDIUM, TRUNNION, createTurretState(), 0)).not.toBeNull();
     expect(state.shotsFired).toBe(2);
   });
 
@@ -137,21 +137,21 @@ describe('firing', () => {
     const turret = createTurretState();
     const direction = gunDirection(turret, 0);
 
-    const muzzle = tryFire(state, PLACEHOLDER_TANK, TRUNNION, turret, 0);
+    const muzzle = tryFire(state, CT_MEDIUM, TRUNNION, turret, 0);
     expect(muzzle).not.toBeNull();
 
     // The muzzle is one barrel length from the trunnion, along the gun's own direction.
-    const barrelLength = PLACEHOLDER_TANK.mainGun.barrelLengthM;
+    const barrelLength = CT_MEDIUM.mainGun.barrelLengthM;
     expect(muzzle!.x).toBeCloseTo(TRUNNION.x + direction.x * barrelLength, 9);
     expect(muzzle!.y).toBeCloseTo(TRUNNION.y + direction.y * barrelLength, 9);
     expect(muzzle!.z).toBeCloseTo(TRUNNION.z + direction.z * barrelLength, 9);
   });
 
   it('places the gun at the ring height above the vehicle', () => {
-    const pivot = trunnionPosition(vec3(5, 2, -3), PLACEHOLDER_TANK.turret.ringHeightM);
+    const pivot = trunnionPosition(vec3(5, 2, -3), CT_MEDIUM.turret.ringHeightM);
     expect(pivot.x).toBe(5);
     expect(pivot.z).toBe(-3);
-    expect(pivot.y).toBeCloseTo(2 + PLACEHOLDER_TANK.turret.ringHeightM, 9);
+    expect(pivot.y).toBeCloseTo(2 + CT_MEDIUM.turret.ringHeightM, 9);
   });
 });
 
@@ -159,7 +159,7 @@ describe('end-to-end firing through the simulation', () => {
   /** Builds a simulation on flat ground so a shot's outcome is unambiguous. */
   function flatSimulation() {
     return new Simulation({
-      vehicle: PLACEHOLDER_TANK,
+      vehicle: CT_MEDIUM,
       spawn: vec3(0, 0, 0),
       terrain: { seed: 1, halfSizeM: 2000, amplitudeM: 0, edgeRiseM: 0 },
     });
@@ -188,14 +188,14 @@ describe('end-to-end firing through the simulation', () => {
     }
 
     // Hold the trigger continuously for three full reload periods.
-    const holdSeconds = PLACEHOLDER_TANK.mainGun.reloadSeconds * 3;
+    const holdSeconds = CT_MEDIUM.mainGun.reloadSeconds * 3;
     const heldTicks = Math.ceil(holdSeconds / DT);
     for (let i = 0; i < heldTicks; i += 1) {
       sim.tick(makeInput(0, 0, aimPoint, true));
     }
 
     // A shot goes out at t = 0 and then once per completed reload, so three reload periods yield three
-    // shots — not the several hundred an unlimited trigger would produce. This is the property that
+    // shots â€” not the several hundred an unlimited trigger would produce. This is the property that
     // matters: the *rate* is bounded by the gun, not by how often the input is sampled.
     expect(sim.telemetry.shotsFired).toBe(3);
     expect(sim.telemetry.shotsFired).toBeLessThan(heldTicks / 10);
@@ -227,7 +227,7 @@ describe('end-to-end firing through the simulation', () => {
 
     const impact = sim.impacts[0]!;
     expect(impact.shellId).toBeGreaterThan(0);
-    expect(impact.shooterId).toBe(PLACEHOLDER_TANK.id);
+    expect(impact.shooterId).toBe(CT_MEDIUM.id);
     expect(impact.targetKind).toBe('terrain');
     expect(impact.flightTimeSeconds).toBeGreaterThan(0);
   });

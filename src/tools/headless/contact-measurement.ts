@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Measures the V6 opening: where the opponent is relative to the player, and how hard it is to see.
  *
  * ## The question
@@ -25,8 +25,8 @@
  */
 import { Battlefield } from '../../core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../core/world/maps/marlowe-crossing.js';
-import { PLACEHOLDER_TANK } from '../../shared/placeholder-tank.js';
-import { ENEMY_TANK } from '../../shared/enemy-tank.js';
+import { CT_MEDIUM } from '../../shared/roster.js';
+import { CT_HEAVY } from '../../shared/roster.js';
 import { Simulation } from '../../core/sim/world.js';
 import { evaluateDetection } from '../../core/spotting/spotting.js';
 import { NEUTRAL_INPUT } from '../../shared/input.js';
@@ -44,7 +44,7 @@ const TICKS_PER_SECOND = 60;
  * system actually reasons about. Using the hull floor instead would overstate occlusion by a metre and make
  * every candidate look worse than it plays.
  */
-const EYE_HEIGHT_M = PLACEHOLDER_TANK.turret.ringHeightM;
+const EYE_HEIGHT_M = CT_MEDIUM.turret.ringHeightM;
 
 /** A speed used only to convert a drive distance into a rough number of seconds, m/s. */
 const REFERENCE_SPEED_MPS = 6;
@@ -252,8 +252,8 @@ export function canSeePair(x: number, z: number): boolean {
  */
 export function reportOpeningContact(secondsToWatch = 12, sampleEverySeconds = 2): string {
   const simulation = new Simulation({
-    vehicle: PLACEHOLDER_TANK,
-    target: ENEMY_TANK,
+    vehicle: CT_MEDIUM,
+    target: CT_HEAVY,
     map: MARLOWE_CROSSING,
   });
 
@@ -264,7 +264,7 @@ export function reportOpeningContact(secondsToWatch = 12, sampleEverySeconds = 2
 
   const totalTicks = secondsToWatch * TICKS_PER_SECOND;
   const sampleTicks = Math.max(1, Math.round(sampleEverySeconds * TICKS_PER_SECOND));
-  const eye = PLACEHOLDER_TANK.turret.ringHeightM;
+  const eye = CT_MEDIUM.turret.ringHeightM;
 
   lines.push('   t     state         range  detected  player');
   let lastState = '';

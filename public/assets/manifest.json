@@ -4,11 +4,15 @@
   "models": {
     "ct-medium": {
       "file": "models/ct-medium.glb",
-      "vehicleId": "placeholder-medium"
+      "vehicleId": "ct-medium"
     },
     "ct-heavy": {
       "file": "models/ct-heavy.glb",
-      "vehicleId": "enemy-medium"
+      "vehicleId": "ct-heavy"
+    },
+    "ct-light": {
+      "file": "models/ct-light.glb",
+      "vehicleId": "ct-light"
     },
     "props": {
       "file": "models/props.glb"

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Simulation } from '../../src/core/sim/world.js';
 import { resolveCombat, type CombatResult } from '../../src/core/combat/combat-resolver.js';
 import { buildWorldPlates, raycastPlates } from '../../src/core/armor/geometry.js';
@@ -6,14 +6,14 @@ import { type ShellImpact } from '../../src/core/ballistics/impact.js';
 import { createDamageState, findModule } from '../../src/core/damage/damage-model.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 import { vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
-import { ENEMY_TANK } from '../../src/shared/enemy-tank.js';
+import { CT_HEAVY } from '../../src/shared/roster.js';
 
 /**
- * End-to-end combat tests: impact record → armour → penetration → damage.
+ * End-to-end combat tests: impact record â†’ armour â†’ penetration â†’ damage.
  *
- * These prove V3's central claim — that a shell striking a *specific* piece of a tank at a *specific*
+ * These prove V3's central claim â€” that a shell striking a *specific* piece of a tank at a *specific*
  * angle produces a *specific* outcome, rather than "projectile touched tank".
  */
 
@@ -21,7 +21,7 @@ const ORIGIN = vec3(0, 0, 0);
 
 /** A synthetic impact travelling along `direction` at the shell's muzzle velocity. */
 function impactOn(
-  definition: typeof PLACEHOLDER_TANK,
+  definition: typeof CT_MEDIUM,
   origin: ReturnType<typeof vec3>,
   direction: ReturnType<typeof vec3>,
 ): ShellImpact {
@@ -99,7 +99,7 @@ describe('through the simulation', () => {
   /** A simulation on flat ground with the stationary target placed ahead of the player. */
   function simWithTarget() {
     return new Simulation({
-      vehicle: PLACEHOLDER_TANK,
+      vehicle: CT_MEDIUM,
       target: TARGET_TANK,
       terrain: { seed: 1, halfSizeM: 2000, amplitudeM: 0, edgeRiseM: 0 },
       spawn: vec3(0, 0, 0),
@@ -128,8 +128,8 @@ describe('through the simulation', () => {
     const target = sim.target!;
 
     // The target's starting position, captured because "the target stays put" is the real property
-    // under test. It was previously asserted as `x ≈ 0`, which held only while the target happened to
-    // be placed straight ahead of a spawn at the origin — an accident of placement rather than a
+    // under test. It was previously asserted as `x â‰ˆ 0`, which held only while the target happened to
+    // be placed straight ahead of a spawn at the origin â€” an accident of placement rather than a
     // property of the system. Target placement is now chosen by search, so this follows the actual
     // start position instead of a coordinate that placement no longer guarantees.
     const targetStart = { ...target.state.position };
@@ -168,12 +168,12 @@ describe('through the simulation', () => {
   it('drives, aims and fires the opponent through the same rules as the player', () => {
     // V4 inverted this test. In V3 it asserted the target could do *nothing* on its own, which pinned
     // the "stationary test target" boundary. V4 replaces that boundary with an opponent, so the
-    // assertion becomes that it acts — but only through the normal input interface.
+    // assertion becomes that it acts â€” but only through the normal input interface.
     //
     // The important part is what this does *not* check: it never calls a damage method. If the opponent
     // were damaging the player on a timer, every one of these assertions would still pass. That is why
     // the enemy-damage tests below are the ones that actually prove the combat rules are shared.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, target: CT_HEAVY });
     const enemy = sim.target!;
     const startPosition = { ...enemy.state.position };
 
@@ -193,8 +193,8 @@ describe('through the simulation', () => {
 
   it('keeps the opponent inside the same reload rules as the player', () => {
     // The gun's authority lives in the core, not in the controller. If the opponent could fire while
-    // reloading, that would be a second rule set — exactly what V4 was told not to build.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    // reloading, that would be a second rule set â€” exactly what V4 was told not to build.
+    const sim = new Simulation({ vehicle: CT_MEDIUM, target: CT_HEAVY });
     const enemy = sim.target!;
 
     for (let i = 0; i < 1200; i += 1) {
@@ -211,21 +211,21 @@ describe('through the simulation', () => {
   it('reports hits on the player separately from hits on the opponent', () => {
     // The HUD has to be able to tell the player "you hit it" from "it hit you", and it cannot infer that
     // from a single undifferentiated list.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, target: CT_HEAVY });
 
     for (let i = 0; i < 1800; i += 1) {
       sim.tick(NEUTRAL_INPUT);
     }
 
     // The opponent was left alone, so anything recorded as incoming really did come from the enemy.
-    expect(sim.target!.damage.hitPoints).toBe(ENEMY_TANK.survivability.hitPoints);
+    expect(sim.target!.damage.hitPoints).toBe(CT_HEAVY.survivability.hitPoints);
     expect(sim.incomingCombat).toEqual([]);
   });
 
   it('leaves a destroyed vehicle unable to move, on either side', () => {
     // Asserted on the **player**, not on the configured target. The target in `simWithTarget` is the
     // inert V3 object with no controller, so it is never stepped with intent and its telemetry is
-    // never refreshed — asserting on it would test nothing. In V4 the player's tank is the vehicle a
+    // never refreshed â€” asserting on it would test nothing. In V4 the player's tank is the vehicle a
     // player can actually destroy, so it is the one whose consequences matter.
     //
     // The same rule has to apply to the opponent, which is covered separately below with a real
@@ -263,7 +263,7 @@ describe('through the simulation', () => {
     // The V4-specific version: with a controller attached, a destroyed opponent must still be inert.
     // The controller is responsible for noticing it is destroyed and emitting a neutral command; this
     // test is what proves that path actually works rather than merely being written.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, target: CT_HEAVY });
     const enemy = sim.target!;
 
     enemy.damage.hitPoints = 0;

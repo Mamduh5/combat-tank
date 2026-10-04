@@ -1,11 +1,17 @@
-import { Engine } from '@babylonjs/core/Engines/engine.js';
+﻿import { Engine } from '@babylonjs/core/Engines/engine.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { Simulation } from '../core/sim/world.js';
 import { Battle } from '../core/battle/battle.js';
 import type { CombatResult } from '../core/combat/combat-resolver.js';
 import { reloadProgress } from '../core/vehicle/main-gun.js';
-import { PLACEHOLDER_TANK } from '../shared/placeholder-tank.js';
-import { ENEMY_TANK } from '../shared/enemy-tank.js';
+import {
+  CT_MEDIUM,
+  DEFAULT_PLAYER_VEHICLE_ID,
+  ROSTER_VEHICLE_IDS,
+  VEHICLE_ROSTER,
+  defaultOpponentFor,
+  vehicleById,
+} from '../shared/roster.js';
 import type { Vec3 } from '../shared/vec3.js';
 import { makeInput, type InputCommand } from '../shared/input.js';
 import { OrbitCamera } from './camera/orbit-camera.js';
@@ -18,15 +24,16 @@ import { CombatAudio, type EngineInput, type ListenerPose } from './audio/combat
 import type { Tank } from '../core/vehicle/tank.js';
 import { CombatEffects } from './render/shell-effects.js';
 import { VehicleVisual } from './render/vehicle-visual.js';
-import { loadVehicleRig } from './assets/vehicle-asset.js';
+import { loadVehicleRig, releaseVehicleRigFor } from './assets/vehicle-asset.js';
 import { Hud } from './ui/hud.js';
+import { VehicleSelectScreen } from './ui/vehicle-select.js';
 
 
 /**
- * Client entry point for **V1 — Movement & Camera Sandbox**.
+ * Client entry point for **V1 â€” Movement & Camera Sandbox**.
  *
  * This file is the whole client: create the simulation, create the view, and pump one into the
- * other each frame. It contains no gameplay rules, which is the point of ADR-0001 — every rule
+ * other each frame. It contains no gameplay rules, which is the point of ADR-0001 â€” every rule
  * lives in `src/core`, so the same simulation can later run headless or on a server.
  *
  * The frame loop is deliberately simple and ordered:
@@ -83,68 +90,196 @@ async function bootstrap(): Promise<void> {
     throw new Error('Combat Tank: #render-canvas is missing from the page.');
   }
 
-  const hud = new Hud();
-
-  // --- Simulation (headless core) ----------------------------------------------------
-  const simulation = new Simulation({
-    // Marlowe Crossing, the V6 battlefield: hard cover, concealment, graded routes, and hand-placed
-    // spawns. The V5 arena is still the default for any test that does not ask for a map, and stays
-    // reachable that way.
-    map: MARLOWE_CROSSING,
-    vehicle: PLACEHOLDER_TANK,
-    // A real opponent from V4: it drives, traverses, fires, and can be destroyed. Its input comes from
-    // `EnemyController` inside the simulation, through the same `InputCommand` the player's keyboard
-    // produces, so every combat rule applies to it identically.
-    target: ENEMY_TANK,
-  });
-
-  // The encounter wraps the simulation rather than living inside it: `Simulation` knows physics,
-  // `Battle` knows what winning means. Restart resets both.
-  const battle = new Battle(simulation);
-
-  // --- Physics (Rapier, for queries only) --------------------------------------------
-  // Initialising this decodes an inlined WASM module, so it is awaited before the first frame.
-  const physics = await PhysicsWorld.create(simulation.terrain);
+const hud = new Hud();
 
   // --- View (Babylon) -----------------------------------------------------------------
+  // The engine, scene and terrain exist before any vehicle does, because none of them depend on one. That
+  // ordering is what makes changing vehicles cheap: the expensive parts â€” the WebGL context, the procedural
+  // terrain, the environment props, the Rapier world â€” are built once and reused by every encounter the
+  // player fights.
   const engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true });
   engine.setHardwareScalingLevel(1);
 
-  const { scene, camera } = createScene(engine, simulation.terrain);
+  // A throwaway simulation used only to obtain the terrain and the battlefield, both of which are
+  // properties of the *map* rather than of any vehicle.
+  const world = new Simulation({ map: MARLOWE_CROSSING, vehicle: CT_MEDIUM });
+
+  const { scene, camera } = createScene(engine, world.terrain);
   // Environment art, built from the same map data the simulation uses. See `battlefield-props.ts` for
   // why the renderer takes the map rather than keeping its own list of things to draw.
-  const props = buildBattlefieldProps(scene, simulation.battlefield);
+  const props = buildBattlefieldProps(scene, world.battlefield);
   // The terrain sampler is injected so the running gear can conform to the ground beneath it. The model
   // itself takes a definition and knows nothing about the battlefield, which is what lets one builder serve
-  // both vehicles; the map is supplied here, where the map is actually known.
-  const groundAt = (x: number, z: number) => simulation.terrain.heightAt(x, z);
+  // every vehicle; the map is supplied here, where the map is actually known.
+  //
+  // Bound to `world.terrain` rather than to an encounter's simulation, deliberately: the surface is the same
+  // whichever tank is driving on it, and reading it from a simulation that is about to be discarded would
+  // make a future map change a two-place edit.
+  const groundAt = (x: number, z: number) => world.terrain.heightAt(x, z);
 
-  // --- Vehicle models (V7 asset pipeline) -----------------------------------------------
-  // Both vehicles are loaded as glTF before the first frame. Awaiting here rather than lazily is
-  // deliberate: the game must not start with a half-built tank, and a model that fails its contract should
-  // produce a clear error on the page instead of a tank that silently loses its gun mid-battle.
-  const playerRig = await loadVehicleRig(scene, simulation.vehicle.definition);
-  const tankVisual = new VehicleVisual(playerRig, scene, groundAt);
-  console.info(`Combat Tank: player model loaded (${playerRig.normalisationNote})`);
-
-  // The opponent is drawn from the same pipeline and the same visual code, so a model change applies to
-  // both. Its variant differs the **silhouette** — longer hull, lower and wider turret, longer gun — as well
-  // as the palette. Shape rather than colour alone, because two tanks differing only in colour are
-  // genuinely hard to tell apart at range, through fog, or for a colour-blind player.
-  let targetVisual: VehicleVisual | null = null;
-  if (simulation.target !== null) {
-    const targetRig = await loadVehicleRig(scene, simulation.target.definition);
-    targetVisual = new VehicleVisual(targetRig, scene, groundAt);
-    console.info(`Combat Tank: opponent model loaded (${targetRig.normalisationNote})`);
-  }
+  // --- Physics (Rapier, for queries only) --------------------------------------------
+  // Initialising this decodes an inlined WASM module, so it is awaited before the first frame. Also a
+  // property of the terrain rather than of a vehicle, so it too is built exactly once.
+  const physics = await PhysicsWorld.create(world.terrain);
 
   const orbitCamera = new OrbitCamera(camera, physics);
   const effects = new CombatEffects(scene);
 
   // Combat audio. The graph is created lazily on the first user gesture, because browsers refuse to start an
-  // AudioContext before one, and a silent game that only becomes audible after the first click reads as broken.
-  // The sound assets themselves load in the background once that gesture arrives.
+  // AudioContext before one, and a silent game that only becomes audible after the first click reads as
+  // broken. The sound assets themselves load in the background once that gesture arrives.
   const audio = new CombatAudio();
+
+  /**
+   * Everything one fight consists of. Replaced wholesale when the player changes vehicles.
+   *
+   * ## Why this is an object rather than three consts
+   *
+   * Before V8 the simulation, the battle and the two visuals were consts captured by the frame loop. That
+   * works perfectly right up to the moment the player is allowed to pick a tank: there is then no way to swap
+   * one vehicle for another without tearing down the engine, the scene and the audio graph as well.
+   *
+   * Holding them together in one object makes "change vehicles" a single assignment, and makes it obvious
+   * what has to be disposed when it happens â€” the visuals own meshes, and nothing else in here owns anything
+   * that needs tearing down.
+   */
+  interface Encounter {
+    readonly simulation: Simulation;
+    readonly battle: Battle;
+    readonly playerVisual: VehicleVisual;
+    readonly targetVisual: VehicleVisual | null;
+  }
+
+  /**
+   * Builds one encounter: simulation, battle, and both vehicle models.
+   *
+   * Both models are loaded before anything can see them. Awaiting here rather than lazily is deliberate:
+   * the game must not start with a half-built tank, and a model that fails the contract should produce a
+   * clear error on the page instead of a tank that quietly loses its gun mid-battle.
+   */
+  async function createEncounter(playerVehicleId: string, opponentVehicleId: string): Promise<Encounter> {
+    const simulation = new Simulation({
+      // Marlowe Crossing, the V6 battlefield: hard cover, concealment, graded routes, and hand-placed
+      // spawns. The V5 arena is still the default for any test that does not ask for a map, and stays
+      // reachable that way.
+      map: MARLOWE_CROSSING,
+      vehicle: vehicleById(playerVehicleId),
+      // A real opponent from V4: it drives, traverses, fires, and can be destroyed. Its input comes from
+      // `EnemyController` inside the simulation, through the same `InputCommand` the player's keyboard
+      // produces, so every combat rule applies to it identically â€” whichever roster vehicle it happens to be.
+      target: vehicleById(opponentVehicleId),
+    });
+    // The encounter wraps the simulation rather than living inside it: `Simulation` knows physics, `Battle`
+    // knows what winning means.
+    const battle = new Battle(simulation);
+
+    const playerRig = await loadVehicleRig(scene, simulation.vehicle.definition);
+    console.info(
+      `Combat Tank: ${simulation.vehicle.definition.displayName} loaded (${playerRig.normalisationNote})`,
+    );
+    const playerVisual = new VehicleVisual(playerRig, scene, groundAt);
+
+    let targetVisual: VehicleVisual | null = null;
+    if (simulation.target !== null) {
+      const targetRig = await loadVehicleRig(scene, simulation.target.definition);
+      console.info(
+        `Combat Tank: ${simulation.target.definition.displayName} loaded (${targetRig.normalisationNote})`,
+      );
+      targetVisual = new VehicleVisual(targetRig, scene, groundAt);
+    }
+
+    return { simulation, battle, playerVisual, targetVisual };
+  }
+
+  /**
+   * Reads the opening matchup from the URL, or falls back to the roster defaults.
+   *
+   * ## Why the URL carries this
+   *
+   * Three separate consumers need to boot a *specific* matchup, and none of them is a person clicking
+   * through a menu:
+   *
+   *  - the live asset audit, which has to verify every vehicle renders correctly, not just the default one;
+   *  - the runtime gate, which drives the real page and needs a known pair to assert against;
+   *  - the owner, who wants to re-test the matchup they were told about rather than hunting for it.
+   *
+   * A URL parameter serves all three and needs no new interface. An unknown id is **ignored in favour of
+   * the default** rather than throwing: a stale link should open the game, not break it, and the failure
+   * mode of "your link silently fought the wrong tank" is much less bad than "the game will not start".
+   */
+  function openingMatchup(): { playerVehicleId: string; opponentVehicleId: string } {
+    const params = new URLSearchParams(window.location.search);
+    const requestedPlayer = params.get('vehicle');
+    const requestedOpponent = params.get('opponent');
+    return {
+      playerVehicleId:
+        requestedPlayer !== null && ROSTER_VEHICLE_IDS.includes(requestedPlayer)
+          ? requestedPlayer
+          : DEFAULT_PLAYER_VEHICLE_ID,
+      opponentVehicleId:
+        requestedOpponent !== null && ROSTER_VEHICLE_IDS.includes(requestedOpponent)
+          ? requestedOpponent
+          : defaultOpponentFor(
+              requestedPlayer !== null && ROSTER_VEHICLE_IDS.includes(requestedPlayer)
+                ? requestedPlayer
+                : DEFAULT_PLAYER_VEHICLE_ID,
+            ),
+    };
+  }
+
+  const opening = openingMatchup();
+  let encounter: Encounter = await createEncounter(opening.playerVehicleId, opening.opponentVehicleId);
+
+  /**
+   * Tears down the current encounter's models and builds another one.
+   *
+   * The disposal matters more than it looks. Each `VehicleVisual` owns real meshes in the scene, and
+   * Babylon will happily keep rendering an orphaned rig forever: nothing about dropping the JavaScript
+   * reference frees GPU memory, so switching vehicles five times without disposing leaves five tanks
+   * standing in the same place. `VehicleVisual.dispose` exists for exactly this.
+   */
+  async function startEncounter(playerVehicleId: string, opponentVehicleId: string): Promise<void> {
+// Release the rigs *before* disposing the visuals, because the cache still holds a reference to the very
+    // nodes being freed. Without this the next encounter is handed destroyed Babylon nodes and renders an
+    // invisible tank — no exception, no failed assertion, just nothing on screen. See `releaseVehicleRigFor`.
+    releaseVehicleRigFor(scene, encounter.simulation.vehicle.definition);
+    if (encounter.simulation.target !== null) {
+      releaseVehicleRigFor(scene, encounter.simulation.target.definition);
+    }
+    encounter.playerVisual.dispose();
+    encounter.targetVisual?.dispose();
+    effects.clear();
+    encounter = await createEncounter(playerVehicleId, opponentVehicleId);
+    // Re-anchor the camera onto the new hull, or the first frame of the new encounter is spent looking at
+    // wherever the previous fight happened to end.
+    orbitCamera.snapToTarget(encounter.simulation.vehicle.state.headingRad);
+    hud.hideBattleOutcome();
+    hud.showRestartHint(false);
+    hud.hideHint();
+    hud.hideBriefing();
+    audio.silenceEngines(1);
+    distanceDrivenM = 0;
+    lastPosition = encounter.simulation.vehicle.state.position;
+    shotsFiredLastFrame = 0;
+    lastBannerTick = -1;
+    lastIncomingTick = -1;
+    restartRequested = false;
+  }
+
+  /**
+   * The pre-battle vehicle selector.
+   *
+   * Built here rather than at module scope because deploying a matchup needs `startEncounter`, which needs
+   * the scene to exist. It opens immediately: the roster exists to be used, and a selector the player has to
+   * discover a key for would be a selector most people never see.
+   *
+   * A content tool and nothing more — it remembers nothing between sessions and unlocks nothing, which is
+   * the line V8 is not allowed to cross. See `ui/vehicle-select.ts` for the reasoning.
+   */
+  const selector = new VehicleSelectScreen('vehicle-select', opening, (choice) => {
+    void startEncounter(choice.playerVehicleId, choice.opponentVehicleId);
+  });
+  selector.show();
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
@@ -153,7 +288,7 @@ async function bootstrap(): Promise<void> {
 
   // Synthetic input override, used by the screenshot harness to exercise firing without a pointer
   // lock. Absent in normal play: `inputFrame` is null and the real input manager is read as usual.
-  // Exposed deliberately — without it, the combat feedback path can only be verified by hand with a
+  // Exposed deliberately â€” without it, the combat feedback path can only be verified by hand with a
   // captured pointer, which is exactly the kind of thing that goes untested.
   let inputFrame: { throttle: number; steer: number; aim: { x: number; y: number; z: number }; fire: boolean } | null =
     null;
@@ -192,7 +327,7 @@ async function bootstrap(): Promise<void> {
     let ticks = 0;
     while (battleAccumulatorSeconds >= BATTLE_TICK_DT && ticks < MAX_BATTLE_CATCHUP_TICKS) {
       battleAccumulatorSeconds -= BATTLE_TICK_DT;
-      battle.tick(cmd);
+      encounter.battle.tick(cmd);
       ticks += 1;
     }
     if (battleAccumulatorSeconds > BATTLE_TICK_DT) {
@@ -215,12 +350,12 @@ async function bootstrap(): Promise<void> {
    * an annoyance rather than a fresh start.
    */
   function restartEncounter(): void {
-    battle.restart();
+    encounter.battle.restart();
     effects.clear();
     // Re-anchor the camera, which is otherwise left wherever the previous battle ended.
-    orbitCamera.snapToTarget(simulation.vehicle.state.headingRad);
-    lastPosition = simulation.vehicle.state.position;
-    shotsFiredLastFrame = simulation.telemetry.shotsFired;
+    orbitCamera.snapToTarget(encounter.simulation.vehicle.state.headingRad);
+    lastPosition = encounter.simulation.vehicle.state.position;
+    shotsFiredLastFrame = encounter.simulation.telemetry.shotsFired;
     lastBannerTick = -1;
     hud.hideBattleOutcome();
     hud.showRestartHint(true);
@@ -230,7 +365,7 @@ async function bootstrap(): Promise<void> {
   // --- Frame loop ----------------------------------------------------------------------
   let lastFrameTimeMs = performance.now();
   let distanceDrivenM = 0;
-  let lastPosition = simulation.vehicle.state.position;
+  let lastPosition = encounter.simulation.vehicle.state.position;
   let shotsFiredLastFrame = 0;
   /**
    * Simulation tick the centred outcome banner last fired on.
@@ -269,7 +404,7 @@ async function bootstrap(): Promise<void> {
     //
     // The opening delay means the accumulator is advanced here but the simulation is stepped by the
     // battle, so the two are not advanced separately: doing both would run the player's input twice.
-    advanceBattle(deltaSeconds, command);
+    advanceBattle(selector.isOpen ? 0 : deltaSeconds, command);
     physics.step();
 
     // The listener pose, recomputed once per frame from the settled camera and shared by every spatial call
@@ -288,32 +423,41 @@ async function bootstrap(): Promise<void> {
     // whether or not the pointer is locked, and a one-shot press cannot be missed on a slow frame.
     //
     // **This was never wired up.** `KeyC` was tracked in `InputManager` and had its default browser
-    // behaviour suppressed, and `OrbitCamera.recentreBehind` existed and was correct — but nothing ever
+    // behaviour suppressed, and `OrbitCamera.recentreBehind` existed and was correct â€” but nothing ever
     // called either. `consumeKeyPress` had no call sites at all. So the documented escape hatch was inert,
     // and because automatic recovery had recently been removed as well, a player who looked away from their
     // tank had *no* way back at all. Found by driving the key in a real browser rather than by reading the
     // code: every unit test passed, because the key handler was never exercised by one.
     if (input.consumeKeyPress('KeyC')) {
-      orbitCamera.recentreBehind(simulation.vehicle.state.headingRad);
+      orbitCamera.recentreBehind(encounter.simulation.vehicle.state.headingRad);
     }
 
-    const state = simulation.vehicle.state;
+    // `V` reopens the vehicle selector without reloading. Polled for the same reason as recentre, and it is
+    // deliberately a *re-open* rather than a cycle: switching vehicles mid-fight is a content tool for
+    // feeling out the roster, not a way to dodge a losing battle, because the fight restarts from the top.
+    if (input.consumeKeyPress('KeyV')) {
+      selector.open();
+      // Drop the pointer lock, or the cursor stays captured by a menu that needs to be clicked.
+      input.releaseLock();
+    }
+
+    const state = encounter.simulation.vehicle.state;
 
     // Counted before anything reads the HUD, so the flash and the shot counter agree about what was
     // fired. Derived from the simulation's own tally rather than from the key state, so a request
     // the gun refused during a reload produces no flash and no count.
-    const shotsFiredThisFrame = simulation.telemetry.shotsFired - shotsFiredLastFrame;
-    shotsFiredLastFrame = simulation.telemetry.shotsFired;
+    const shotsFiredThisFrame = encounter.simulation.telemetry.shotsFired - shotsFiredLastFrame;
+    shotsFiredLastFrame = encounter.simulation.telemetry.shotsFired;
 
     // 5. Copy simulation state onto the view. The renderer only ever reads.
     //
     // The frame delta is handed over because the track conforming eases toward the ground at a fixed rate
     // per second rather than a fixed fraction per frame, so it behaves identically at 30 Hz and 144 Hz.
-    tankVisual.apply(state, simulation.vehicle.turretState, deltaSeconds);
-    if (targetVisual !== null && simulation.target !== null) {
-      targetVisual.apply(simulation.target.state, simulation.target.turretState, deltaSeconds);
+    encounter.playerVisual.apply(state, encounter.simulation.vehicle.turretState, deltaSeconds);
+    if (encounter.targetVisual !== null && encounter.simulation.target !== null) {
+      encounter.targetVisual.apply(encounter.simulation.target.state, encounter.simulation.target.turretState, deltaSeconds);
       // A destroyed target is visibly a wreck, so the outcome is legible without reading the panel.
-      targetVisual.setDestroyed(simulation.target.damage.destroyed);
+      encounter.targetVisual.setDestroyed(encounter.simulation.target.damage.destroyed);
     }
     orbitCamera.update(
       { x: state.position.x, y: state.position.y, z: state.position.z },
@@ -326,8 +470,8 @@ async function bootstrap(): Promise<void> {
 
     // 6. Presentation effects for the shells and impacts the simulation reported this frame.
     //    Everything here is driven by what the core actually accepted, so an effect always means the
-    //    simulation did the thing — never merely that a key was pressed.
-    for (const impact of simulation.impacts) {
+    //    simulation did the thing â€” never merely that a key was pressed.
+    for (const impact of encounter.simulation.impacts) {
       effects.showImpact(
         impact,
         // The core deliberately splits "where and how did it hit" (V2) from "what does that do" (V3), so the
@@ -336,21 +480,21 @@ async function bootstrap(): Promise<void> {
         new Vector3(impact.incomingDirection.x, impact.incomingDirection.y, impact.incomingDirection.z),
       );
     }
-    effects.update(simulation.shells.inFlight, deltaSeconds);
+    effects.update(encounter.simulation.shells.inFlight, deltaSeconds);
 
     // 7. HUD, fed from simulation values rather than anything derived from the view.
-    hud.updateDriving(simulation.telemetry);
+    hud.updateDriving(encounter.simulation.telemetry);
     hud.updateAimRange(aimRangeM);
     // V6 contact state, read from the simulation rather than recomputed here. The HUD is a view: if it
     // worked out visibility for itself it would be a second implementation of the spotting rules, and
     // the two would eventually disagree about whether the player can see the enemy.
     {
-      const contact = simulation.playerContact.contact;
+      const contact = encounter.simulation.playerContact.contact;
       hud.setContact(contact.state, contact.state !== 'undetected');
     }
-    const reloading = simulation.telemetry.gunLoadState === 'reloading';
+    const reloading = encounter.simulation.telemetry.gunLoadState === 'reloading';
     hud.updateReloadProgress(
-      reloadProgress(simulation.vehicle.gunState, simulation.vehicle.definition.mainGun.reloadSeconds),
+      reloadProgress(encounter.simulation.vehicle.gunState, encounter.simulation.vehicle.definition.mainGun.reloadSeconds),
       reloading,
     );
 
@@ -360,16 +504,16 @@ async function bootstrap(): Promise<void> {
     //    The last resolved tick is tracked so the centred banner fires **once per shot**. Without it
     //    the banner re-triggers on every frame the result is still present in `simulation.combat`,
     //    which pins it permanently on screen instead of flashing for a moment.
-    if (simulation.combat.length > 0) {
-      const outcome = simulation.combat[simulation.combat.length - 1]!;
+    if (encounter.simulation.combat.length > 0) {
+      const outcome = encounter.simulation.combat[encounter.simulation.combat.length - 1]!;
       hud.updateHitFeedback(
         outcome,
-        simulation.target?.damage.hitPoints ?? 0,
+        encounter.simulation.target?.damage.hitPoints ?? 0,
         outcome.kind === 'penetrated' ? outcome.damage.modulesDestroyed : [],
       );
 
-      if (lastBannerTick !== simulation.tickCount) {
-        lastBannerTick = simulation.tickCount;
+      if (lastBannerTick !== encounter.simulation.tickCount) {
+        lastBannerTick = encounter.simulation.tickCount;
         // The armour-miss case carries neither plate nor damage, so it is handled separately rather
         // than through a nested conditional that would not preserve the discriminant narrowing.
         if (outcome.kind === 'armour-miss') {
@@ -379,7 +523,7 @@ async function bootstrap(): Promise<void> {
             outcome.kind === 'ricocheted' ? 'RICOCHET' : outcome.kind.toUpperCase();
           const sub =
             outcome.kind === 'penetrated'
-              ? `−${outcome.damage.vehicleDamage} HP · ${outcome.plate.definition.region}`
+              ? `âˆ’${outcome.damage.vehicleDamage} HP Â· ${outcome.plate.definition.region}`
               : outcome.plate.definition.region;
           hud.showCombatBanner(verdict, outcome.kind, sub);
         }
@@ -389,10 +533,10 @@ async function bootstrap(): Promise<void> {
     // 9. Incoming hits on the player. Reported separately from `combat` because "it hit me" is the most
     //    urgent thing on screen and must not be mistaken for "I hit it". Without this the player could
     //    not tell, from the feedback alone, which side of the exchange a penetration belonged to.
-    if (simulation.incomingCombat.length > 0) {
-      const incoming = simulation.incomingCombat[simulation.incomingCombat.length - 1]!;
-      if (lastIncomingTick !== simulation.tickCount) {
-        lastIncomingTick = simulation.tickCount;
+    if (encounter.simulation.incomingCombat.length > 0) {
+      const incoming = encounter.simulation.incomingCombat[encounter.simulation.incomingCombat.length - 1]!;
+      if (lastIncomingTick !== encounter.simulation.tickCount) {
+        lastIncomingTick = encounter.simulation.tickCount;
         const verdict =
           incoming.kind === 'ricocheted'
             ? 'RICOCHETED'
@@ -403,7 +547,7 @@ async function bootstrap(): Promise<void> {
                 : 'HIT';
         const sub =
           incoming.kind === 'penetrated'
-            ? `−${incoming.damage.vehicleDamage} HP · ${incoming.plate.definition.region}`
+            ? `âˆ’${incoming.damage.vehicleDamage} HP Â· ${incoming.plate.definition.region}`
             : incoming.kind === 'armour-miss'
               ? ''
               : incoming.plate.definition.region;
@@ -411,7 +555,7 @@ async function bootstrap(): Promise<void> {
       }
 
       // Sound by outcome, so the player learns the four cases apart by ear. Each is a separate asset with its
-      // own spectrum — a penetration is a low crunch and a blocked hit a bright clang — rather than one
+      // own spectrum â€” a penetration is a low crunch and a blocked hit a bright clang â€” rather than one
       // impact sound at different volumes, which the ear cannot reliably tell apart.
       const impactPoint = incomingImpactPoint(incoming);
       if (incoming.kind === 'ricocheted') {
@@ -434,17 +578,17 @@ async function bootstrap(): Promise<void> {
     //
     // All three are driven from the same `shotsFiredThisFrame` counter, which is derived from the
     // simulation's own tally rather than from the fire button. A request the gun refused during a reload
-    // therefore produces no recoil, no flash, and no sound — exactly as it produces no shot.
+    // therefore produces no recoil, no flash, and no sound â€” exactly as it produces no shot.
     if (shotsFiredThisFrame > 0) {
-      const muzzle = tankVisual.getMuzzleWorldPosition();
+      const muzzle = encounter.playerVisual.getMuzzleWorldPosition();
       // The barrel's world direction, read from the model's own muzzle marker and trunnion rather than
       // re-derived from the simulation's gun vector, so the blast always comes out of the visible barrel.
       const barrelForward = muzzle
-        .subtract(tankVisual.vehicleRig.gun.getAbsolutePosition())
+        .subtract(encounter.playerVisual.vehicleRig.gun.getAbsolutePosition())
         .normalize();
       effects.fireGun(muzzle, barrelForward);
-      tankVisual.fireRecoil();
-      audio.gunFire(listenerPose, muzzle);
+      encounter.playerVisual.fireRecoil();
+      audio.gunFire(listenerPose, muzzle, encounter.simulation.vehicle.definition.audio);
       // A short camera shake. Restrained on purpose: the player must keep their aim, so this is felt rather
       // than seen.
       orbitCamera.shake(FIRE_SHAKE_SECONDS, FIRE_SHAKE_MAGNITUDE);
@@ -452,16 +596,16 @@ async function bootstrap(): Promise<void> {
 
     // 11. The player's impacts. The enemy's own hits on it were handled above as incoming, so they are
     // skipped here rather than being played twice.
-    for (const impact of simulation.impacts) {
-      if (impact.targetKind !== 'vehicle' || impact.targetId === simulation.vehicle.definition.id) {
+    for (const impact of encounter.simulation.impacts) {
+      if (impact.targetKind !== 'vehicle' || impact.targetId === encounter.simulation.vehicle.definition.id) {
         audio.terrainImpact(listenerPose, impact.position);
       }
     }
 
     // 12. Battle outcome. Checked after combat so a killing shot is reflected in the same frame.
-    if (battle.state === 'victory' || battle.state === 'defeat') {
-      const won = battle.state === 'victory';
-      const wreckAt = simulation.target?.state.position ?? camera.position;
+    if (encounter.battle.state === 'victory' || encounter.battle.state === 'defeat') {
+      const won = encounter.battle.state === 'victory';
+      const wreckAt = encounter.simulation.target?.state.position ?? camera.position;
       audio.destruction(listenerPose, wreckAt);
       // A confirming or failing UI tone, so the player knows the result by ear as well as by the banner. This
       // is the "basic UI/battle-result feedback" category the brief asks for.
@@ -472,10 +616,10 @@ async function bootstrap(): Promise<void> {
       }
       hud.showBattleOutcome(
         won,
-        simulation.telemetry.shotsFired,
-        simulation.target?.telemetry.shotsFired ?? 0,
-        simulation.vehicle.damage.hitPoints,
-        simulation.target?.damage.hitPoints ?? 0,
+        encounter.simulation.telemetry.shotsFired,
+        encounter.simulation.target?.telemetry.shotsFired ?? 0,
+        encounter.simulation.vehicle.damage.hitPoints,
+        encounter.simulation.target?.damage.hitPoints ?? 0,
       );
       hud.showRestartHint(true);
     }
@@ -483,19 +627,19 @@ async function bootstrap(): Promise<void> {
     // 13. The continuous loops: engine, tracks, and turret servo.
     //
     // Fed from each vehicle's *own* telemetry rather than from a shared "engine loudness" number, because
-    // the brief asks that the player hear the tank working harder when they ask more of it — and that means
+    // the brief asks that the player hear the tank working harder when they ask more of it â€” and that means
     // throttle, acceleration, and speed separately, not one blended value.
     audio.updateEngine(
-      engineInputFor(simulation.vehicle, command),
-      simulation.target === null ? null : engineInputFor(simulation.target, null),
-      simulation.vehicle.telemetry.turretTraverseRateDegPerSec,
+      engineInputFor(encounter.simulation.vehicle, command),
+      encounter.simulation.target === null ? null : engineInputFor(encounter.simulation.target, null),
+      encounter.simulation.vehicle.telemetry.turretTraverseRateDegPerSec,
       deltaSeconds,
     );
 
     // 13. Opponent status strip. Updated every frame rather than on change, because the range readout is
-    //     continuous — the player watches it shrink as they close, which is the cue for when to shoot.
-    if (simulation.target !== null) {
-      const t = simulation.target;
+    //     continuous â€” the player watches it shrink as they close, which is the cue for when to shoot.
+    if (encounter.simulation.target !== null) {
+      const t = encounter.simulation.target;
       const dx = t.state.position.x - state.position.x;
       const dz = t.state.position.z - state.position.z;
       hud.updateTargetStatus({
@@ -512,14 +656,14 @@ async function bootstrap(): Promise<void> {
     // 14. The player's own condition. The module consequences are summarised rather than itemised: a
     //     player who has lost a track needs to know their mobility is impaired, not to read the
     //     internal module id.
-    const playerDamage = simulation.vehicle.damage;
+    const playerDamage = encounter.simulation.vehicle.damage;
     hud.updatePlayerStatus({
       hp: playerDamage.hitPoints,
       maxHp: playerDamage.maxHitPoints,
       destroyed: playerDamage.destroyed,
-      immobilised: simulation.vehicle.telemetry.immobilised,
-      tracksDestroyed: simulation.vehicle.telemetry.tracksDestroyed,
-      gunDisabled: simulation.vehicle.telemetry.gunDisabled,
+      immobilised: encounter.simulation.vehicle.telemetry.immobilised,
+      tracksDestroyed: encounter.simulation.vehicle.telemetry.tracksDestroyed,
+      gunDisabled: encounter.simulation.vehicle.telemetry.gunDisabled,
     });
 
     hud.tick(deltaSeconds);
@@ -552,7 +696,7 @@ async function bootstrap(): Promise<void> {
       hud.toggleDebug();
     }
     // Restart on R. Bound on the window rather than through the input manager because it must work
-    // whether or not the pointer is locked — the player is very likely reading the end screen without
+    // whether or not the pointer is locked â€” the player is very likely reading the end screen without
     // the pointer captured, and a restart that only worked with the pointer locked would fail exactly
     // when it is most wanted. Also accepted while the battle is running, so a player who wants to reset
     // a hopeless fight is not forced to lose it first.
@@ -582,7 +726,7 @@ async function bootstrap(): Promise<void> {
     // round to the front and can no longer tell which way their tank is pointing. Bound on the window
     // for the same reason as restart: it has to work with the pointer locked or unlocked.
     if (event.key === 'c' || event.key === 'C') {
-      orbitCamera.recentreBehind(simulation.vehicle.state.headingRad);
+      orbitCamera.recentreBehind(encounter.simulation.vehicle.state.headingRad);
     }
   });
 
@@ -591,20 +735,51 @@ async function bootstrap(): Promise<void> {
 
   // Expose the pieces for debugging from the browser console. Read-only by convention: mutating
   // simulation state from here would bypass the input interface the core is designed around. `scene`
-  // is included because visual problems are almost always diagnosed by inspecting the graph — which
+  // is included because visual problems are almost always diagnosed by inspecting the graph â€” which
   // meshes exist, where they are, whether anything is enabled.
   Object.assign(globalThis, {
     __combatTank: {
-      simulation,
+      // A **getter**, not a value, and this is a fix rather than a style choice. `encounter` is reassigned
+      // whenever the player changes vehicles, so `simulation: encounter.simulation` captured the *opening*
+      // fight's object and left it there — the console would show a destroyed simulation from a matchup that
+      // had already ended, while the player watched a live one. V8's roster made that reachable in one
+      // keypress; before it, the only way to change vehicles was to reload, which hid the bug completely.
+      get simulation(): Simulation {
+        return encounter.simulation;
+      },
+      get battle(): Battle {
+        return encounter.battle;
+      },
+      /** The player's model for the current encounter. A getter for the same reason as `simulation` above. */
+      get playerVisual(): VehicleVisual {
+        return encounter.playerVisual;
+      },
+      /** The opponent's model, or `null` for a solo encounter. */
+      get targetVisual(): VehicleVisual | null {
+        return encounter.targetVisual;
+      },
+      selectVehicle: (playerVehicleId: string, opponentVehicleId?: string): Promise<void> =>
+        startEncounter(
+          playerVehicleId,
+          opponentVehicleId ?? defaultOpponentFor(playerVehicleId),
+        ),
+      roster: VEHICLE_ROSTER.map((entry) => ({
+        id: entry.vehicle.id,
+        displayName: entry.vehicle.displayName,
+        role: entry.role,
+        tagline: entry.tagline,
+      })),
       physics,
       orbitCamera,
       input,
       hud,
       scene,
-      tankVisual,
-      targetVisual,
-      // Exposed so the screenshot and audio tools can assert against the real graph — checking that the loops
-      // exist and that a shot produced voices — rather than screenshotting a silent game and calling it a pass.
+      // Exposed as a *getter* rather than as a value. The encounter is replaced whenever the player changes
+      // vehicles, so anything captured by value here would be a stale reference within one selection — a
+      // debugging aid that reports the previous fight is worse than none.
+      getEncounter: () => encounter,
+      // Exposed so the screenshot and audio tools can assert against the real graph â€” checking that the loops
+      // exist and that a shot produced voices â€” rather than screenshotting a silent game and calling it a pass.
       audio,
       // Exposed so the screenshot tools can assert the environment actually built something, rather
       // than a screenshot that happens to look empty for reasons nobody recorded.
@@ -680,7 +855,7 @@ const CAMERA_FALLBACK_POINT: Vec3 = { x: 0, y: 0, z: 0 };
  *
  * An `armour-miss` is the one variant with no impact point, because the shell passed through the space
  * the vehicle occupies without touching a plate. It is returned as the camera position, which makes the
- * sound play at full volume — correct, since "the shot went past" is a close-range observation anyway.
+ * sound play at full volume â€” correct, since "the shot went past" is a close-range observation anyway.
  */
 function incomingImpactPoint(result: CombatResult): { x: number; y: number; z: number } {
   if (result.kind === 'armour-miss') {
@@ -701,7 +876,7 @@ function distanceBetween(a: { x: number; y: number; z: number }, b: { x: number;
  *
  * Recomputed each frame rather than cached, because the camera's yaw is mouse-driven and changes constantly.
  * The right vector is `forward` rotated by a quarter turn about +Y, which in Babylon's left-handed space is
- * `(forwardZ, -forwardX)` — the same basis the simulation's heading uses, so audio pans the same way the world
+ * `(forwardZ, -forwardX)` â€” the same basis the simulation's heading uses, so audio pans the same way the world
  * turns. Getting this backwards is audible: a sound to the player's right would come out of the left speaker,
  * which is worse than no spatialisation at all.
  */
@@ -726,7 +901,7 @@ function listenerPoseFor(camera: {
 /**
  * Builds the audio layer's view of one vehicle's motion.
  *
- * Throttle comes from the vehicle's own telemetry — what the driver asked for — rather than from the raw
+ * Throttle comes from the vehicle's own telemetry â€” what the driver asked for â€” rather than from the raw
  * input command, so the engine responds to the *demand* even while the drive is traction-limited or the tank is
  * stalled on a hill. That distinction is the whole point: a tank flooring it against a slope it cannot climb
  * should sound like it is working hard, because it is.
@@ -748,6 +923,9 @@ function engineInputFor(vehicle: Tank, command: InputCommand | null): EngineInpu
     stopped: Math.abs(vehicle.state.speedMps) < 0.35,
     // A destroyed vehicle's engine dies away rather than cutting, which the audio layer eases.
     gainScale: telemetry.destroyed ? 0 : 1,
+    // Read from the definition, so the engine note belongs to the tank that is making it and cannot drift
+    // out of step with it.
+    audio: vehicle.definition.audio,
   };
 }
 
@@ -762,4 +940,6 @@ bootstrap().catch((error: unknown) => {
   }
   console.error('Combat Tank failed to start:', error);
 });
+
+
 

@@ -118,6 +118,16 @@ const GROUND_SUPPORT_HALF_WIDTH_FRACTION = 0.5;
  */
 export class Tank {
   readonly definition: VehicleDefinition;
+
+  /**
+   * Identity of this particular vehicle within a battle, added in V8.
+   *
+   * Equal to `definition.id` unless the simulation gave it something else, which it does for the opponent
+   * so that two identical vehicles can fight each other. See `VehicleInit.instanceId` for why a shared
+   * id is not merely untidy but silently disables half the combat model.
+   */
+  readonly instanceId: string;
+
   state: VehicleState;
 
   /** Most recent step's diagnostics. Read by tests, the HUD, and the AI arriving in V5. */
@@ -191,6 +201,9 @@ export class Tank {
 
   constructor(definition: VehicleDefinition, init: VehicleInit) {
     this.definition = definition;
+    // Defaults to the definition id, so a lone vehicle behaves exactly as it always has and nothing
+    // outside `Simulation` has to think about instance identity at all.
+    this.instanceId = init.instanceId ?? definition.id;
     // Replaced on the first `step`, which every caller makes before reading anything. Seeded with a
     // sampler that reports flat ground so construction stays total and cannot throw on a null.
     this.terrain = { heightAt: () => 0 } as unknown as Terrain;

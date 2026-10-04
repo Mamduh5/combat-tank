@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Simulation } from '../../src/core/sim/world.js';
 import { applyPenetration, createDamageState, type DamageState } from '../../src/core/damage/damage-model.js';
 import { makeInput } from '../../src/shared/input.js';
 import { vec3 } from '../../src/shared/vec3.js';
 import { TARGET_TANK } from '../../src/shared/placeholder-target.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * A destroyed target must read as destroyed, and stay destroyed.
@@ -15,8 +15,8 @@ import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
  * says it is destroyed teaches the player to distrust the whole readout.
  *
  * Damage is applied **directly through the damage model** rather than by firing shells. The question
- * here is what the destroyed *state* does — whether it latches, whether it stops the vehicle, and
- * whether the health figure the HUD bar is drawn from stays valid — not whether the gun can be aimed
+ * here is what the destroyed *state* does â€” whether it latches, whether it stops the vehicle, and
+ * whether the health figure the HUD bar is drawn from stays valid â€” not whether the gun can be aimed
  * at a stationary target from a driven position, which is ballistics and is covered in `combat.test.ts`.
  */
 describe('target destruction', () => {
@@ -41,7 +41,7 @@ describe('target destruction', () => {
 
   function freshSim() {
     return new Simulation({
-      vehicle: PLACEHOLDER_TANK,
+      vehicle: CT_MEDIUM,
       target: TARGET_TANK,
       // Flat ground, so nothing about this test depends on terrain.
       terrain: { seed: 7, halfSizeM: 2000, amplitudeM: 0, edgeRiseM: 0 },

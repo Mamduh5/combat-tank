@@ -129,6 +129,21 @@ export function validateVehicleDefinition(
     requireRange(penetration, 'ricochetThresholdDeg', 1, 90, `${label}.penetration`, errors);
   }
 
+  // --- Audio, added in V8 ------------------------------------------------------------------
+  // Required, and range-checked rather than merely checked for presence. An unbounded pitch scale is the
+  // interesting failure here: `enginePitchScale: 40` is a finite number, passes any "is it a number" test,
+  // and produces an audio graph that is technically running and completely unusable. The bounds are the
+  // ones documented on `VehicleAudioProfile` — wide enough for a genuinely different engine character,
+  // narrow enough that the result still reads as the same family.
+  const audio = requireSection(definition, 'audio', errors);
+  if (audio) {
+    requireRange(audio, 'enginePitchScale', 0.5, 2, `${label}.audio`, errors);
+    requireRange(audio, 'gunPitchScale', 0.5, 2, `${label}.audio`, errors);
+    for (const gain of ['engineGainScale', 'trackGainScale', 'gunGainScale', 'turretGainScale']) {
+      requireRange(audio, gain, 0, 2, `${label}.audio`, errors);
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 

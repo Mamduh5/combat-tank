@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   buildWorldPlates,
   localToWorld,
@@ -6,7 +6,7 @@ import {
 } from '../../src/core/armor/geometry.js';
 import { effectiveArmorMm, resolvePenetration } from '../../src/core/armor/penetration.js';
 import { type Vec3, vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import type { ArmorPlate, VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
 /**
@@ -18,13 +18,13 @@ import type { ArmorPlate, VehicleDefinition } from '../../src/shared/vehicle-def
  * not against whatever the implementation happens to print.
  */
 
-const MODEL = PLACEHOLDER_TANK.penetration;
-const SHELL = PLACEHOLDER_TANK.mainShell;
+const MODEL = CT_MEDIUM.penetration;
+const SHELL = CT_MEDIUM.mainShell;
 
 /** A vehicle with a single flat plate facing +Z, for isolating the maths from any real layout. */
 function flatPlate(overrides: Partial<ArmorPlate> = {}): VehicleDefinition {
   return {
-    ...PLACEHOLDER_TANK,
+    ...CT_MEDIUM,
     armor: [
       {
         id: 'test-plate',
@@ -48,7 +48,7 @@ describe('localToWorld', () => {
   });
 
   it('rotates a forward offset to the right for a 90-degree heading', () => {
-    // Heading 90° means facing +X, so local +Z must map to world +X.
+    // Heading 90Â° means facing +X, so local +Z must map to world +X.
     const world = localToWorld(vec3(0, 0, 0), Math.PI / 2, vec3(0, 0, 2));
     expect(world.x).toBeCloseTo(2, 9);
     expect(world.z).toBeCloseTo(0, 9);
@@ -124,7 +124,7 @@ describe('plate raycasting', () => {
   });
 
   it('follows the turret heading for turret-mounted plates', () => {
-    // A turret plate 5 m ahead, with the turret turned 90°, must move to the side. This proves the
+    // A turret plate 5 m ahead, with the turret turned 90Â°, must move to the side. This proves the
     // mount is respected and turret plates are not simply bolted to the hull.
     const definition = flatPlate({ mount: 'turret' });
     const forward = buildWorldPlates(definition, vec3(0, 0, 0), 0, 0)[0]!;
@@ -138,7 +138,7 @@ describe('plate raycasting', () => {
   it('raises turret plates to the ring height', () => {
     const definition = flatPlate({ mount: 'turret', centerM: vec3(0, 0, 5) });
     const plate = buildWorldPlates(definition, vec3(0, 0, 0), 0, 0)[0]!;
-    expect(plate.center.y).toBeCloseTo(PLACEHOLDER_TANK.turret.ringHeightM, 6);
+    expect(plate.center.y).toBeCloseTo(CT_MEDIUM.turret.ringHeightM, 6);
   });
 
   it('does not raise hull plates', () => {
@@ -154,12 +154,12 @@ describe('effective armour', () => {
   });
 
   it('doubles at 60 degrees, the textbook case', () => {
-    // cos(60°) = 0.5, so the shell travels twice as far through the plate.
+    // cos(60Â°) = 0.5, so the shell travels twice as far through the plate.
     expect(effectiveArmorMm(100, 60)).toBeCloseTo(200, 6);
   });
 
   it('is unchanged by half the nominal thickness at 60 degrees', () => {
-    // The relationship is linear in nominal thickness: 50 mm at 60° presents the same 100 mm that
+    // The relationship is linear in nominal thickness: 50 mm at 60Â° presents the same 100 mm that
     // 100 mm does head-on. This is what makes sloping interchangeable with adding plate.
     expect(effectiveArmorMm(50, 60)).toBeCloseTo(100, 6);
   });
@@ -198,8 +198,8 @@ describe('penetration outcomes', () => {
     // The single most important property of the model: identical shell, identical plate, different
     // outcome purely from angle.
     //
-    // Hand-computed at 60 degrees: geometric factor 1/cos(60°) = 2, so 120 mm presents 240 mm, while
-    // a half-normalised 150 mm shell reaches 150 × (1 + 0.5 × (2 − 1)) = 225 mm. 225 < 240, blocked.
+    // Hand-computed at 60 degrees: geometric factor 1/cos(60Â°) = 2, so 120 mm presents 240 mm, while
+    // a half-normalised 150 mm shell reaches 150 Ã— (1 + 0.5 Ã— (2 âˆ’ 1)) = 225 mm. 225 < 240, blocked.
     const squareOn = resolvePenetration(SHELL, MODEL, 120, 0, 800);
     const angled = resolvePenetration(SHELL, MODEL, 120, 60, 800);
 
@@ -256,8 +256,8 @@ describe('normalisation', () => {
     // steeply sloped armour.
     //
     // Asserted as an *outcome* and a margin, because "the ratio is unchanged" is the actual property. At
-    // 45° the factor is 1/cos(45°) ≈ 1.4142, so a 200 mm plate presents 282.8 mm and the shell reaches
-    // 150 × 1.4142 ≈ 212.1 mm — still blocked, exactly as it is head-on.
+    // 45Â° the factor is 1/cos(45Â°) â‰ˆ 1.4142, so a 200 mm plate presents 282.8 mm and the shell reaches
+    // 150 Ã— 1.4142 â‰ˆ 212.1 mm â€” still blocked, exactly as it is head-on.
     const shell = { ...SHELL, normalization: 1 };
     const headOn = resolvePenetration(shell, MODEL, 200, 0, 800);
     const angled = resolvePenetration(shell, MODEL, 200, 45, 800);
@@ -279,7 +279,7 @@ describe('normalisation', () => {
   });
 
   it('cancels exactly half the penalty at normalisation 0.5', () => {
-    // At 60 degrees the geometric factor is 2, so a half-normalised shell gets 1 + 0.5 × (2 − 1) = 1.5.
+    // At 60 degrees the geometric factor is 2, so a half-normalised shell gets 1 + 0.5 Ã— (2 âˆ’ 1) = 1.5.
     const result = resolvePenetration({ ...SHELL, normalization: 0.5 }, MODEL, 100, 60, 800);
     expect(result.shellPenetrationMm).toBeCloseTo(SHELL.nominalPenetrationMm * 1.5, 6);
   });
@@ -345,7 +345,7 @@ describe('ricochet', () => {
 describe('real armour layouts', () => {
   /** The player's tank at the origin, so plate geometry can be probed directly. */
   function probe(from: Vec3, to: Vec3) {
-    const plates = buildWorldPlates(PLACEHOLDER_TANK, vec3(0, 0, 0), 0, 0);
+    const plates = buildWorldPlates(CT_MEDIUM, vec3(0, 0, 0), 0, 0);
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const dz = to.z - from.z;
@@ -363,7 +363,7 @@ describe('real armour layouts', () => {
 
     const frontAngle = incidenceBetween(front.plate.normal, vec3(0, 0, -1));
     const sideAngle = incidenceBetween(side.plate.normal, vec3(-1, 0, 0));
-    // The sloped front presents 60° to a level shot; the flat side presents 0°.
+    // The sloped front presents 60Â° to a level shot; the flat side presents 0Â°.
     expect(frontAngle).toBeCloseTo(60, 3);
     expect(sideAngle).toBeCloseTo(0, 6);
   });
@@ -390,7 +390,7 @@ describe('real armour layouts', () => {
       800,
     );
 
-    // Hand-computed: the front plate is 200 mm at 60°, so it presents 400 mm against a 225 mm shell.
+    // Hand-computed: the front plate is 200 mm at 60Â°, so it presents 400 mm against a 225 mm shell.
     expect(frontResult.effectiveArmorMm).toBeCloseTo(400, 3);
     expect(frontResult.outcome).toBe('blocked');
 
@@ -417,12 +417,12 @@ describe('real armour layouts', () => {
   });
 
   it('gives every plate a unique id', () => {
-    const ids = PLACEHOLDER_TANK.armor.map((plate) => plate.id);
+    const ids = CT_MEDIUM.armor.map((plate) => plate.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('gives every plate a positive thickness and non-zero extent', () => {
-    for (const plate of PLACEHOLDER_TANK.armor) {
+    for (const plate of CT_MEDIUM.armor) {
       expect(plate.thicknessMm).toBeGreaterThan(0);
       expect(plate.widthM).toBeGreaterThan(0);
       expect(plate.heightM).toBeGreaterThan(0);
@@ -434,8 +434,8 @@ describe('real armour layouts', () => {
  * Angle in degrees between the **reversed** travel direction and a surface normal.
  *
  * Reversing is the V2 convention (`computeIncidenceAngleDeg`): a shell meets a surface along the line it
- * came from, so 0° means driving straight in. Measuring against the forward direction instead reports
- * 180° − incidence, which looks plausible and is the mirror image of the truth.
+ * came from, so 0Â° means driving straight in. Measuring against the forward direction instead reports
+ * 180Â° âˆ’ incidence, which looks plausible and is the mirror image of the truth.
  */
 function incidenceBetween(normal: Vec3, travelDirection: Vec3): number {
   const reversed = vec3(-travelDirection.x, -travelDirection.y, -travelDirection.z);

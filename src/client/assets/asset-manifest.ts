@@ -48,8 +48,9 @@ export function assetUrl(relativePath: string): string {
  * one object, and it is why this map exists at all rather than the loader taking a literal filename.
  */
 export const VEHICLE_MODELS = {
-  'placeholder-medium': 'models/ct-medium.glb',
-  'enemy-medium': 'models/ct-heavy.glb',
+  'ct-medium': 'models/ct-medium.glb',
+  'ct-heavy': 'models/ct-heavy.glb',
+  'ct-light': 'models/ct-light.glb',
 } as const;
 
 /** The shared environment prop library. One file, instanced many times at runtime. */

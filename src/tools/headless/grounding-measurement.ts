@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The V6 blocker: the tank floats above uneven ground.
  *
  * ## What this measures
@@ -9,8 +9,8 @@
  * track's lower edge actually ends up in world space, and compares that against the terrain under each
  * sample. The signed result is the number that matters:
  *
- *  - **positive** — daylight under the track. This is the reported bug.
- *  - **negative** — the track has sunk into the ground.
+ *  - **positive** â€” daylight under the track. This is the reported bug.
+ *  - **negative** â€” the track has sunk into the ground.
  *
  * Both are failures; the second is the one a naive "just lower the vehicle" fix creates, which is why the
  * brief forbids it and why this reports the pair together.
@@ -18,7 +18,7 @@
  * ## Why the transform is restated rather than shared
  *
  * The renderer uses Babylon's `node.rotation`, whose composition order is
- * `Ry(yaw) * Rx(pitch) * Rz(roll)` — not the intuitive `Rz * Rx * Ry`. Restating it here is deliberate:
+ * `Ry(yaw) * Rx(pitch) * Rz(roll)` â€” not the intuitive `Rz * Rx * Ry`. Restating it here is deliberate:
  * if the two implementations shared a helper, a change to the helper would change the measurement and the
  * thing being measured at the same time, and the measurement would stay green while the bug stayed real.
  * The browser probe in `tools/grounding-probe.js` re-measures the same quantity through Babylon's own
@@ -26,7 +26,7 @@
  */
 import { Battlefield } from '../../core/world/battlefield.js';
 import { MARLOWE_CROSSING } from '../../core/world/maps/marlowe-crossing.js';
-import { PLACEHOLDER_TANK } from '../../shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../shared/roster.js';
 import { TANK_PROPORTIONS } from '../../client/render/tank-proportions.js';
 import {
   groundSupportPitchRad,
@@ -35,8 +35,8 @@ import {
 } from '../../core/vehicle/ground-support.js';
 
 /** Vehicle footprint, mirrored from the renderer so both read the same numbers. */
-const LENGTH_M = PLACEHOLDER_TANK.dimensions.lengthM;
-const WIDTH_M = PLACEHOLDER_TANK.dimensions.widthM;
+const LENGTH_M = CT_MEDIUM.dimensions.lengthM;
+const WIDTH_M = CT_MEDIUM.dimensions.widthM;
 const TRACK_SPAN_M = LENGTH_M * TANK_PROPORTIONS.trackLengthFraction;
 const TRACK_WIDTH_M = WIDTH_M * TANK_PROPORTIONS.trackWidthFraction;
 const TRACK_CENTRE_X_M = WIDTH_M * (0.5 - TRACK_WIDTH_M / WIDTH_M / 2);
@@ -48,7 +48,7 @@ const SAMPLES_ALONG = 7;
  * A gap this large reads as daylight to the player rather than as a tolerance.
  *
  * Derived rather than guessed: at the orbit camera's usual 8-14 m standoff and a 40 degree vertical field
- * of view, a 0.12 m gap subtends about 0.5 degrees � roughly 8 pixels in a 760 px frame. That is the point
+ * of view, a 0.12 m gap subtends about 0.5 degrees — roughly 8 pixels in a 760 px frame. That is the point
  * at which it stops being a tolerance and becomes a visible dark line under the track, which is the thing
  * the owner is reporting. Anything below it is inside the error of the vehicle's own ground clearance.
  */
@@ -178,7 +178,7 @@ function toWorld(
  *
  * Called rather than restated. The earlier version of this file reimplemented the single-normal
  * decomposition inline, and when the core was fixed to fit a support plane this tool went on measuring the
- * *old* formula � reporting the bug as still present, against code that no longer existed. A measurement
+ * *old* formula — reporting the bug as still present, against code that no longer existed. A measurement
  * that keeps its own copy of the thing under test cannot detect the thing changing, which is the same
  * failure mode as the original contact-offset comment in `vehicle-visual.ts`.
  *
@@ -242,7 +242,7 @@ export function measureGrounding(
   // Kept as the full expression rather than simplified to `heightAt`, because a reader comparing this against
   // the renderer needs to see that *both* subtractions exist. Dropping either one reintroduces the original
   // float, and dropping either one is invisible to every other measurement in this file.
-  const rideHeightM = PLACEHOLDER_TANK.dimensions.groundClearanceM;
+  const rideHeightM = CT_MEDIUM.dimensions.groundClearanceM;
   const rootY = terrain.heightAt(x, z) + rideHeightM - rideHeightM - clearanceM;
 
   const forwardX = Math.sin(headingRad);
@@ -366,7 +366,7 @@ export function measureGrounding(
  * the track links and road wheels stand proud of the track but do not reach lower. The measured offset is
  * therefore zero, which means the entire flat-ground clearance is the simulation's own `groundClearanceM`
  * of 0.48 m. The renderer subtracts this from the simulation's ride height, so the two cancel on flat
- * ground � which is exactly why flat ground looks right and only uneven ground does not.
+ * ground — which is exactly why flat ground looks right and only uneven ground does not.
  */
 export function headlessContactOffsetM(): number {
   return 0;
@@ -473,7 +473,7 @@ export function reportGrounding(): { text: string; readings: GroundingReading[] 
 
   const lines: string[] = [];
   lines.push('=== V6 uneven-ground contact: measured gap under the rendered track ===');
-  lines.push(`map: Marlowe Crossing   vehicle: ${PLACEHOLDER_TANK.displayName}`);
+  lines.push(`map: Marlowe Crossing   vehicle: ${CT_MEDIUM.displayName}`);
   lines.push(
     `track run ${TRACK_SPAN_M.toFixed(2)} m long, ${SAMPLES_ALONG * 2} samples per pose; ` +
       `a gap above ${FLOATING_GAP_M} m reads as floating`,
@@ -513,8 +513,8 @@ export function reportGrounding(): { text: string; readings: GroundingReading[] 
  *
  * ## Why this exists
  *
- * The brief requires verifying on *perfectly flat* ground, and the obvious way to get it � sampling a
- * point and assuming it is flat � is exactly the assumption that produced the last two rounds of
+ * The brief requires verifying on *perfectly flat* ground, and the obvious way to get it — sampling a
+ * point and assuming it is flat — is exactly the assumption that produced the last two rounds of
  * confusion. The railway formation is level, but it is level because a `LevelCorridor` forces it to be,
  * and it carries ballast and sleeper props; a vehicle parked there is standing on a mesh rather than on
  * ground, so it cannot tell us what happens on honest flat terrain.

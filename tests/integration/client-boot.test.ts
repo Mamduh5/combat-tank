@@ -1,16 +1,16 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { PhysicsWorld } from '../../src/client/physics/rapier-terrain.js';
 import { Simulation } from '../../src/core/sim/world.js';
 import { Terrain } from '../../src/core/world/terrain.js';
 import { makeInput } from '../../src/shared/input.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * Integration test for the client's physics layer.
  *
  * This is the one place the client and the core meet, and it is where a disagreement between them
  * would show up as a vehicle that floats above the ground, sinks into hills, or a camera that clips
- * through terrain. Babylon itself is not exercised — it needs a WebGL context, and testing a
+ * through terrain. Babylon itself is not exercised â€” it needs a WebGL context, and testing a
  * renderer is low value next to testing the *agreement* between the simulated surface and the
  * collision surface.
  *
@@ -34,7 +34,7 @@ describe('PhysicsWorld against the simulation terrain', () => {
 
     // The collision mesh samples the analytic surface onto a grid, so it can only be as accurate as
     // that sampling allows. With the terrain's shortest wavelength at 95 m and roughly 4 m cells the
-    // error is well under a quarter of a metre — far below anything visible, and far tighter than
+    // error is well under a quarter of a metre â€” far below anything visible, and far tighter than
     // the half-cell bound that would merely prove the two describe the same surface.
     let worstErrorM = 0;
     for (const [x, z] of SAMPLE_POINTS) {
@@ -57,7 +57,7 @@ describe('PhysicsWorld against the simulation terrain', () => {
       expect(hit).not.toBeNull();
       // A downward-facing normal would mean the triangle winding is inverted, which makes every ray
       // cast in the game behave strangely. The threshold allows for genuinely steep ground: the
-      // steepest part of the map is around 45°, whose normal still has a positive y component.
+      // steepest part of the map is around 45Â°, whose normal still has a positive y component.
       expect(hit!.normal.y).toBeGreaterThan(0.3);
     }
 
@@ -133,7 +133,7 @@ describe('PhysicsWorld against the simulation terrain', () => {
     // surface beneath the vehicle never sits meaningfully above where the hull is resting.
     const terrain = new Terrain();
     const physics = await PhysicsWorld.create(terrain);
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
 
     let worstPenetrationM = 0;
     for (let i = 0; i < 900; i += 1) {

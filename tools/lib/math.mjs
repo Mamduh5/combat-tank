@@ -72,10 +72,25 @@ export class Matrix {
 
   transformPoint(v) {
     const a = this.m;
+    // The translation is read from `a[12..14]` — the **last row**, not the fourth column.
+    //
+    // This is the bug that produced three different contract violations on every vehicle at once, and it is
+    // worth recording why it was so hard to see. `translation()` writes `[..., x, y, z, 1]` into indices
+    // 12–14, and `mul()` composes row-major, so the whole module is row-major and internally consistent.
+    // `transformPoint` was the single function that reached for `a[3], a[7], a[11]` — the fourth *column* —
+    // as if the storage were column-major. For a rotation or a scale, all four of those entries are `0`, so
+    // the bug is invisible. For a translation they are exactly the values being discarded.
+    //
+    // So `pushTranslate` silently did nothing, and every part of every generated model collapsed onto the
+    // origin: the hull's authored lift above the track line vanished, the fenders' lateral offset vanished,
+    // and the model came out both wider than its definition and sunk below its own origin. Every type check,
+    // lint rule and unit test passed, because all of them were reading the *authored* numbers rather than the
+    // *produced* vertices. `transformDirection` is correct and is deliberately left alone — it takes no
+    // translation, so it never had the ambiguity.
     return new Vector3(
-      a[0] * v.x + a[1] * v.y + a[2] * v.z + a[3],
-      a[4] * v.x + a[5] * v.y + a[6] * v.z + a[7],
-      a[8] * v.x + a[9] * v.y + a[10] * v.z + a[11],
+      a[0] * v.x + a[1] * v.y + a[2] * v.z + a[12],
+      a[4] * v.x + a[5] * v.y + a[6] * v.z + a[13],
+      a[8] * v.x + a[9] * v.y + a[10] * v.z + a[14],
     );
   }
 

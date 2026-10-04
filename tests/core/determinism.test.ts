@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Simulation, TICK_DT_SECONDS, TICK_HZ } from '../../src/core/sim/world.js';
 import { Rng } from '../../src/core/rng/index.js';
 import { makeInput } from '../../src/shared/input.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * Determinism tests.
@@ -52,7 +52,7 @@ function scriptedInputs(): ReturnType<typeof makeInput>[] {
 describe('Simulation determinism', () => {
   it('produces bit-identical state for the same seed and inputs', () => {
     const runScript = (): string => {
-      const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+      const sim = new Simulation({ vehicle: CT_MEDIUM });
       const inputs = scriptedInputs();
       for (let i = 0; i < 1200; i += 1) {
         sim.tick(inputs[i % inputs.length]!);
@@ -76,12 +76,12 @@ describe('Simulation determinism', () => {
     const inputs = scriptedInputs();
     const inputForTick = (tick: number) => inputs[tick % inputs.length]!;
 
-    const oneTickPerFrame = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const oneTickPerFrame = new Simulation({ vehicle: CT_MEDIUM });
     for (let tick = 0; tick < 1200; tick += 1) {
       oneTickPerFrame.tick(inputForTick(tick));
     }
 
-    const tenTicksPerFrame = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const tenTicksPerFrame = new Simulation({ vehicle: CT_MEDIUM });
     for (let frame = 0; frame < 120; frame += 1) {
       for (let t = 0; t < 10; t += 1) {
         tenTicksPerFrame.tick(inputForTick(frame * 10 + t));
@@ -96,7 +96,7 @@ describe('Simulation determinism', () => {
     // A slow frame runs several ticks against one sampled input rather than skipping time, so the
     // vehicle's motion depends on elapsed time and not on frame rate.
     const inputs = scriptedInputs();
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
 
     // One frame long enough to require three ticks.
     const ticks = sim.advance(TICK_DT_SECONDS * 3, inputs[0]!);
@@ -107,7 +107,7 @@ describe('Simulation determinism', () => {
   it('produces identical state when driven through advance() with varying frame times', () => {
     const inputs = scriptedInputs();
     const run = (): string => {
-      const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+      const sim = new Simulation({ vehicle: CT_MEDIUM });
       // Deliberately irregular frame times, as a real browser produces.
       const deltas = [0.016, 0.033, 0.008, 0.021, 0.05, 0.012, 0.017, 0.009, 0.04, 0.014];
       for (let frame = 0; frame < 600; frame += 1) {
@@ -176,7 +176,7 @@ describe('Simulation clock', () => {
   });
 
   it('advances whole ticks only, never a partial one', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     // Half a tick: not enough to run any simulation.
     expect(sim.advance(TICK_DT_SECONDS / 2)).toBe(0);
     expect(sim.elapsedTicks).toBe(0);
@@ -187,14 +187,14 @@ describe('Simulation clock', () => {
   });
 
   it('reports elapsed seconds exactly as ticks times the timestep', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     sim.runTicks(90);
     expect(sim.elapsedTicks).toBe(90);
     expect(sim.elapsedSeconds).toBeCloseTo(1.5, 10);
   });
 
   it('ignores non-positive and non-finite deltas rather than rewinding', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     sim.runTicks(10);
     const before = snapshotOf(sim);
 
@@ -207,7 +207,7 @@ describe('Simulation clock', () => {
   });
 
   it('caps catch-up after a long stall instead of spiralling', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     // Ten seconds of backlog: without a cap this would run 600 ticks in one frame, taking longer
     // than a frame and causing the next frame to be later still.
     expect(sim.advance(10)).toBeLessThanOrEqual(5);

@@ -317,6 +317,53 @@ export interface PenetrationModel {
   readonly ricochetThresholdDeg: number;
 }
 
+/**
+ * How a vehicle sounds, as differences from the shared V7 audio family.
+ *
+ * ## Why this is on the vehicle at all
+ *
+ * The brief for V8 asks for modest per-vehicle differences in "engine character, track character and gun
+ * report", and says a shared audio family with parameter differences is acceptable at this stage. Recording
+ * those parameters **on the vehicle** rather than in a client-side table keyed by id is deliberate: a second
+ * map keyed by vehicle is a second source of truth about a vehicle, and the two drift. One vehicle, one
+ * definition, one place to change how it sounds.
+ *
+ * Everything here is a **multiplier on the shared recording**, never a new file. The V7 audio set is
+ * deliberately small (17 synthesised WAVs); recording a distinct engine note per vehicle would multiply that
+ * by the roster for no gameplay benefit at this stage, and would make `npm run assets` the bottleneck for
+ * adding a tank. What actually differs between vehicles is *character*, and character is largely a matter of
+ * pitch, weight and how much low end there is — which is what these numbers control.
+ *
+ * Only the client consumes this today. It lives in `shared` anyway, because it is vehicle content rather than
+ * audio-engine policy: the moment a server wanted to describe a vehicle to a client it would already be
+ * there, and `VehicleDefinition` is the one place that says "everything about this vehicle".
+ */
+export interface VehicleAudioProfile {
+  /**
+   * Engine loop pitch, as a multiplier on the shared recording.
+   *
+   * Below 1 is deeper and slower-revving; above 1 is lighter and more urgent. Bounded to a range where the
+   * result still reads as the same engine rather than as a different synthesiser: pushing `playbackRate`
+   * far shifts every partial and turns a heavy into a chipmunk.
+   */
+  readonly enginePitchScale: number;
+  /** Engine level, as a multiplier on the shared mix. */
+  readonly engineGainScale: number;
+  /**
+   * Track loop level, as a multiplier.
+   *
+   * A heavy's tracks are louder simply because there is more of them being dragged; a light's are a
+   * higher, thinner sound that nearly disappears at low speed.
+   */
+  readonly trackGainScale: number;
+  /** Gun report level, as a multiplier. The main loudness difference between calibres. */
+  readonly gunGainScale: number;
+  /** Gun report pitch, as a multiplier. A bigger gun is a lower report with more body. */
+  readonly gunPitchScale: number;
+  /** Turret servo level, as a multiplier. A light turret is audible; a heavy one is a low groan. */
+  readonly turretGainScale: number;
+}
+
 export interface VehicleDefinition {
   readonly id: string;
   readonly displayName: string;
@@ -339,5 +386,15 @@ export interface VehicleDefinition {
    * geometry can be replaced with real art without touching the data model.
    */
   readonly visualId: string;
+
+  /**
+   * Per-vehicle audio character, added in V8. Multipliers on the shared V7 audio family.
+   *
+   * Required rather than optional on purpose. An absent profile would mean a silent default and a class of
+   * vehicle that is quietly identical to another in every respect the player can hear, which is exactly the
+   * "different skins" outcome V8 exists to rule out. Making it required also means adding a vehicle forces
+   * the question "how does this sound?" to be answered rather than skipped.
+   */
+  readonly audio: VehicleAudioProfile;
 }
 

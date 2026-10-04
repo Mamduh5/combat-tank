@@ -1,8 +1,8 @@
-/**
+﻿/**
  * Builds every V7 asset: the two tank models, the texture set, and the sound set.
  *
  * Run with `npm run assets`. Output lands in `public/assets/` and is committed, because these are project
- * artefacts rather than build output — the game loads them at runtime, and an artist replacing one should be
+ * artefacts rather than build output â€” the game loads them at runtime, and an artist replacing one should be
  * able to do so without running Node.
  *
  * ## Why a build step at all
@@ -112,7 +112,7 @@ function pruneOrphans() {
  * The build reported success. Lint passed. TypeScript passed. Unit tests passed, because none of them read the
  * vertex data.
  *
- * A non-finite coordinate is not a rendering problem to be discovered downstream — it is a defect in the
+ * A non-finite coordinate is not a rendering problem to be discovered downstream â€” it is a defect in the
  * source numbers, and the only place it can be caught cheaply is here, at the moment the numbers are written.
  * Failing the build is the correct outcome: a malformed asset must never ship because the pipeline was pleased
  * to emit a file.
@@ -130,7 +130,7 @@ function assertFiniteGeometry(label, mesh) {
       throw new Error(
         `build-assets: ${label} has a non-finite position (${String(value)}) at component ${i} ` +
           `(vertex ${Math.floor(i / 3)}, axis ${['x', 'y', 'z'][i % 3]}). ` +
-          `This is almost always a dimension field read as undefined — check deriveDimensions in tank-model.mjs.`,
+          `This is almost always a dimension field read as undefined â€” check deriveDimensions in tank-model.mjs.`,
       );
     }
   }
@@ -169,13 +169,35 @@ function SIZE_OF(pixels) {
 
 
 /**
+ * Every vehicle model, in one table.
+ *
+ * ## Why this is a table rather than three calls
+ *
+ * Adding a vehicle used to mean adding a `buildTankGlb` call, a `PAINTS` entry, a `write`, a `console.log`
+ * and a manifest entry â€” five separate places to remember, and forgetting any one produced a *partial*
+ * result rather than a failure. A model built but never registered simply does not load; a manifest entry
+ * with no model behind it 404s. Both are the class of defect the V7 recovery pass was spent on.
+ *
+ * One table makes the roster the unit of work: a vehicle listed here is built, written, printed and
+ * recorded together, or the build throws. Adding a fourth vehicle is one array entry.
+ *
+ * `vehicleId` is the `visualId` a `VehicleDefinition` carries to select this model, so it is spelled here
+ * once rather than maintained in parallel in the runtime manifest.
+ */
+const VEHICLE_MODELS = [
+  { variant: 'medium', file: 'models/ct-medium.glb', vehicleId: 'ct-medium' },
+  { variant: 'heavy', file: 'models/ct-heavy.glb', vehicleId: 'ct-heavy' },
+  { variant: 'light', file: 'models/ct-light.glb', vehicleId: 'ct-light' },
+];
+
+/**
  * Builds one tank model into a `.glb`.
  *
  * The node hierarchy written here is the **asset contract** the runtime loader depends on. If a name changes
  * in this function it must change in `src/client/render/vehicle-asset.ts` and in `docs/asset-pipeline.md`
- * together — which is why the names are written out literally rather than assembled from a template.
+ * together â€” which is why the names are written out literally rather than assembled from a template.
  *
- * @param {'player'|'opponent'} variant
+ * @param {'medium'|'heavy'|'light'} variant
  * @param {number[]} paintRgb linear base-colour tint for the vehicle's paint
  */
 function buildTankGlb(variant, paintRgb) {
@@ -190,7 +212,7 @@ function buildTankGlb(variant, paintRgb) {
   const rubber = addTextureSet(gltf, 'rubber', TEXTURES.rubber());
 
   // metallicFactor/roughnessFactor of 1 mean "read them from the map". The texture carries per-texel
-  // variation — chipped paint is rougher than bare metal — which a scalar could not express.
+  // variation â€” chipped paint is rougher than bare metal â€” which a scalar could not express.
   const matPaint = gltf.addMaterial({
     name: 'tank-paint',
     baseColorFactor: [1, 1, 1, 1],
@@ -238,7 +260,7 @@ function buildTankGlb(variant, paintRgb) {
 
   // --- Nodes -----------------------------------------------------------------------------
   // `Hull` sits at the origin: the centre of the track contact line, on the vehicle's own centreline. That
-  // is the contract — the loader places this node straight at the simulation's hull position, and no offset
+  // is the contract â€” the loader places this node straight at the simulation's hull position, and no offset
   // math exists anywhere in gameplay code.
   const hullNode = gltf.addNode({ name: 'Hull', mesh: meshHull, translation: parts.hull.position });
   const turretNode = gltf.addNode({ name: 'Turret', mesh: meshTurret, translation: parts.turret.position });
@@ -261,7 +283,7 @@ function buildTankGlb(variant, paintRgb) {
   gltf.nodes[gunNode].children = [muzzleNode];
   gltf.nodes[turretNode].children = [gunNode];
 
-  // The handedness node: one rotation on one node is the entire authored-space → glTF-space conversion, and
+  // The handedness node: one rotation on one node is the entire authored-space â†’ glTF-space conversion, and
   // the loader's documented contract accounts for it. Baking it into every vertex instead would make the
   // file harder to read and impossible to verify by eye.
   const root = gltf.addNode({
@@ -295,7 +317,7 @@ function buildTankGlb(variant, paintRgb) {
  * repeated props and ordinary instances for one-offs.
  *
  * Per-instance variation comes from the runtime's own scale and rotation plus the seeded jitter these meshes
- * are authored with — not from duplicating geometry.
+ * are authored with â€” not from duplicating geometry.
  */
 function buildPropsGlb() {
   const gltf = new GltfBuilder({ generator: 'combat-tank asset pipeline (tools/build-assets.mjs)' });
@@ -392,7 +414,7 @@ function buildPropsGlb() {
   add('signal-post', signalPost(6.2), mats.iron);
 
   // The station building, plus a separate roof mesh so the runtime can use the roofing-iron material on it
-  // and the brick material on the walls — two materials on one building is what stops it reading as a block.
+  // and the brick material on the walls â€” two materials on one building is what stops it reading as a block.
   add('station-walls', stationBuilding(9, 6.5, 3.6), mats.brick);
   add('station-trim', stationBuilding(9, 6.5, 3.6), mats.iron);
 
@@ -405,7 +427,7 @@ function buildPropsGlb() {
 /**
  * Writes the shared environment textures the game loads at runtime.
  *
- * Separate PNG files rather than embedded in the prop GLB because many different meshes share them — the
+ * Separate PNG files rather than embedded in the prop GLB because many different meshes share them â€” the
  * ground, the roads, the ballast, and the buildings all use the same handful. Embedding per model would
  * duplicate several megabytes for no benefit.
  */
@@ -453,7 +475,7 @@ function buildSharedTextures() {
 function buildAudio() {
   const fire = SOUNDS.gunFire();
 
-  // One-shots: normalised, then edge-faded. The fade matters more than it looks — a hard start on a
+  // One-shots: normalised, then edge-faded. The fade matters more than it looks â€” a hard start on a
   // transient is an audible click, and a gun report that clicks sounds like a UI bug rather than a weapon.
   const oneShots = {
     'gun-crack': fire.crack,
@@ -480,7 +502,7 @@ function buildAudio() {
   }
 
   // Loops: made seamless, then normalised to a *lower* peak than the one-shots. A loop plays continuously, so
-  // its peak effectively is its average loudness — matching the one-shots would make the engine louder than
+  // its peak effectively is its average loudness â€” matching the one-shots would make the engine louder than
   // a gun shot, which is exactly the balance error that makes a game sound wrong.
   const loops = {
     'engine-idle': SOUNDS.engineLoop(0),
@@ -505,8 +527,9 @@ function buildAudio() {
  * the two colours a military vehicle is actually painted, which keeps the whole thing coherent.
  */
 const PAINTS = {
-  player: [0.29, 0.33, 0.19],
-  opponent: [0.34, 0.34, 0.33],
+  medium: [0.29, 0.33, 0.19],
+  heavy: [0.34, 0.34, 0.33],
+  light: [0.36, 0.31, 0.24],
 };
 
 function main() {
@@ -514,7 +537,7 @@ function main() {
   //
   // Wiping looked tidier and was actively harmful: the build validates geometry as it goes, so a validation
   // failure partway through threw *after* the directory had been emptied. That left a tree containing only
-  // the assets built before the failure and none of the ones after — which the game then reports as
+  // the assets built before the failure and none of the ones after â€” which the game then reports as
   // "Unexpected magic" when it fetches a truncated or absent model, an error that points at the runtime
   // rather than at the build step that actually broke.
   //
@@ -523,17 +546,18 @@ function main() {
   mkdirSync(OUT, { recursive: true });
   writtenPaths.clear();
 
-  const player = buildTankGlb('player', PAINTS.player);
-  write('models/ct-medium.glb', player.glb, 'model', `${player.stats.triangles} triangles, ${player.stats.nodes} nodes`);
-  console.log(
-    `  ct-medium.glb  ${player.stats.triangles} triangles  ${player.stats.meshes} meshes  ${player.stats.nodes} nodes`,
-  );
-
-  const opponent = buildTankGlb('opponent', PAINTS.opponent);
-  write('models/ct-heavy.glb', opponent.glb, 'model', `${opponent.stats.triangles} triangles, ${opponent.stats.nodes} nodes`);
-  console.log(
-    `  ct-heavy.glb   ${opponent.stats.triangles} triangles  ${opponent.stats.meshes} meshes  ${opponent.stats.nodes} nodes`,
-  );
+  // One loop over the whole roster. Used to be three blocks of copy-pasted build/write/log, which meant
+  // adding a vehicle meant remembering every one of those steps and getting a *partial* result when you
+  // forgot: a model built but never registered simply does not load, and a manifest entry with no model
+  // behind it 404s. Both are exactly the class of defect the V7 recovery pass spent its time on.
+    for (const model of VEHICLE_MODELS) {
+    const built = buildTankGlb(model.variant, PAINTS[model.variant]);
+    write(model.file, built.glb, 'model', `${built.stats.triangles} triangles, ${built.stats.nodes} nodes`);
+    console.log(
+      `  ${model.file.padEnd(22)} ${built.stats.triangles} triangles  ` +
+        `${built.stats.meshes} meshes  ${built.stats.nodes} nodes`,
+    );
+  }
 
   const props = buildPropsGlb();
   write('models/props.glb', props.glb, 'model', `${props.stats.nodes} prop types`);
@@ -544,12 +568,18 @@ function main() {
 
   // A machine-readable manifest. The loader could hard-code its asset list, but a manifest means it
   // discovers what exists, so a missing asset is a build-time diff rather than a runtime 404.
+  //
+  // Built from `VEHICLE_MODELS` rather than written out, so the manifest cannot claim a model this run
+  // did not produce. The old hand-written version listed `ct-medium` against a vehicle id of
+  // `placeholder-medium`, which was accurate for V7 and silently wrong the moment the roster was renamed â€”
+  // exactly the kind of drift a generated index exists to make impossible.
   const manifest = {
     generatedBy: 'tools/build-assets.mjs',
     provenance: 'Generated in-project. No external assets. See docs/asset-provenance.md.',
     models: {
-      'ct-medium': { file: 'models/ct-medium.glb', vehicleId: 'placeholder-medium' },
-      'ct-heavy': { file: 'models/ct-heavy.glb', vehicleId: 'enemy-medium' },
+      ...Object.fromEntries(
+        VEHICLE_MODELS.map((model) => [model.vehicleId, { file: model.file, vehicleId: model.vehicleId }]),
+      ),
       props: { file: 'models/props.glb' },
     },
     textures: [...new Set(report.filter((r) => r.kind === 'texture').map((r) => r.name))],

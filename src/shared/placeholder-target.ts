@@ -1,4 +1,4 @@
-import { PLACEHOLDER_TANK } from './placeholder-tank.js';
+﻿import { CT_MEDIUM } from './roster.js';
 import { vec3 } from './vec3.js';
 import type { VehicleDefinition } from './vehicle-definition.js';
 
@@ -7,7 +7,7 @@ import type { VehicleDefinition } from './vehicle-definition.js';
  *
  * This exists so the player can validate armour, penetration and damage by hand. It is deliberately
  * **not an opponent**: it does not move, aim, fire, or decide anything. That boundary is the whole
- * point — V4 is where a fighting enemy arrives, and nothing here should make that version's job easier
+ * point â€” V4 is where a fighting enemy arrives, and nothing here should make that version's job easier
  * by quietly doing part of it.
  *
  * It is a **separate data file**, not a variant of the player's tank, because that is the proof that
@@ -20,8 +20,8 @@ import type { VehicleDefinition } from './vehicle-definition.js';
  * The target is deliberately **not** the same tank. It has a thicker, less sloped front plate and a thin,
  * flat rear, which produces the outcomes the version needs to be demonstrable:
  *
- *  - front plate: **blocked** at close range — the shell bounces off
- *  - side plate: **penetrated** — the obvious flank shot works
+ *  - front plate: **blocked** at close range â€” the shell bounces off
+ *  - side plate: **penetrated** â€” the obvious flank shot works
  *  - rear plate: **penetrated**, and reaches the engine module
  *
  * A target with the player's own armour would let the player conclude that aiming does not matter,
@@ -30,7 +30,7 @@ import type { VehicleDefinition } from './vehicle-definition.js';
 
 /** Stationary-target variant of the placeholder tank's handling numbers. */
 export const TARGET_TANK: VehicleDefinition = {
-  ...PLACEHOLDER_TANK,
+  ...CT_MEDIUM,
 
   id: 'placeholder-target',
   displayName: 'Target Tank',
@@ -38,20 +38,20 @@ export const TARGET_TANK: VehicleDefinition = {
   // Held still by the simulation rather than by zero power, so the turret and gun still work and the
   // vehicle still settles onto the ground properly.
   powertrain: {
-    ...PLACEHOLDER_TANK.powertrain,
+    ...CT_MEDIUM.powertrain,
     maxSpeedMps: 0,
     maxReverseSpeedMps: 0,
   },
 
   turret: {
-    ...PLACEHOLDER_TANK.turret,
+    ...CT_MEDIUM.turret,
     // A casemate-style restriction, kept deliberately so the model's ability to express a limited gun
-    // arc is exercised rather than only ever being configured at 360°.
+    // arc is exercised rather than only ever being configured at 360Â°.
     maxTraverseDeg: 90,
   },
 
   survivability: {
-    ...PLACEHOLDER_TANK.survivability,
+    ...CT_MEDIUM.survivability,
     // Fewer hit points than the player's tank, so the target can be destroyed within a sensible number
     // of penetrating shots during a single test session.
     hitPoints: 700,
@@ -96,7 +96,7 @@ export const TARGET_TANK: VehicleDefinition = {
 
   armor: [
     // Thicker and far less sloped than the player's front plate: this is the plate that stops shots,
-    // and it is meant to. A pitch of 25° presents much less thickness than the player's 60°.
+    // and it is meant to. A pitch of 25Â° presents much less thickness than the player's 60Â°.
     {
       id: 'target-hull-front',
       region: 'hull-front',
@@ -194,7 +194,7 @@ export const TARGET_TANK: VehicleDefinition = {
   ],
 
   penetration: {
-    referenceVelocityMps: PLACEHOLDER_TANK.penetration.referenceVelocityMps,
-    ricochetThresholdDeg: PLACEHOLDER_TANK.penetration.ricochetThresholdDeg,
+    referenceVelocityMps: CT_MEDIUM.penetration.referenceVelocityMps,
+    ricochetThresholdDeg: CT_MEDIUM.penetration.ricochetThresholdDeg,
   },
 };

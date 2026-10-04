@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   createTurretState,
   gunDirection,
@@ -7,14 +7,14 @@ import {
   updateTurret,
 } from '../../src/core/vehicle/turret.js';
 import { vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
 /**
  * Turret and gun tests.
  *
  * These cover the property the owner singled out: **hull, turret, gun and firing are separate
- * systems**. Most of the assertions are about what the turret must *not* do — it must not snap, must
+ * systems**. Most of the assertions are about what the turret must *not* do â€” it must not snap, must
  * not follow the hull's rotation on its own, and must respect mechanical limits.
  */
 
@@ -27,7 +27,7 @@ function servoFor(
   aimPoint: ReturnType<typeof vec3> | null,
   seconds: number,
   hullHeadingRad = 0,
-  definition: VehicleDefinition = PLACEHOLDER_TANK,
+  definition: VehicleDefinition = CT_MEDIUM,
 ): void {
   const steps = Math.round(seconds / DT);
   for (let i = 0; i < steps; i += 1) {
@@ -50,9 +50,9 @@ function variantWith(overrides: {
   maxDepressionDeg?: number;
 }): VehicleDefinition {
   return {
-    ...PLACEHOLDER_TANK,
-    turret: { ...PLACEHOLDER_TANK.turret, ...overrides },
-    mainGun: { ...PLACEHOLDER_TANK.mainGun, ...overrides },
+    ...CT_MEDIUM,
+    turret: { ...CT_MEDIUM.turret, ...overrides },
+    mainGun: { ...CT_MEDIUM.mainGun, ...overrides },
   };
 }
 
@@ -60,7 +60,7 @@ describe('turret traverse', () => {
   it('does not snap to an aim point', () => {
     const state = createTurretState();
     // One tick toward a target 90 degrees away.
-    updateTurret(state, PLACEHOLDER_TANK, 0, ORIGIN, pointAt(Math.PI / 2, 100), DT);
+    updateTurret(state, CT_MEDIUM, 0, ORIGIN, pointAt(Math.PI / 2, 100), DT);
 
     // A 90-degree swing at 32 deg/s with a 45 deg/s^2 ramp cannot happen in 1/60 s.
     const movedDeg = (gunHeadingRad(state, 0) * 180) / Math.PI;
@@ -75,10 +75,10 @@ describe('turret traverse', () => {
 
   it('never exceeds the configured traverse rate', () => {
     const state = createTurretState();
-    const maxRate = PLACEHOLDER_TANK.turret.traverseDegPerSec;
+    const maxRate = CT_MEDIUM.turret.traverseDegPerSec;
 
     for (let i = 0; i < 600; i += 1) {
-      updateTurret(state, PLACEHOLDER_TANK, 0, ORIGIN, pointAt(Math.PI, 200), DT);
+      updateTurret(state, CT_MEDIUM, 0, ORIGIN, pointAt(Math.PI, 200), DT);
       expect(Math.abs(state.traverseRateDegPerSec)).toBeLessThanOrEqual(maxRate + 1e-6);
     }
   });
@@ -150,7 +150,7 @@ describe('turret independence from the hull', () => {
 
     servoFor(state, aimPoint, 10, 0);
     // The hull swings 180 degrees. The aim point has not moved, so the gun must come back round to
-    // it — and it is the local angle that has to change to do that.
+    // it â€” and it is the local angle that has to change to do that.
     servoFor(state, aimPoint, 25, Math.PI);
 
     expect(gunHeadingRad(state, Math.PI)).toBeCloseTo(Math.PI / 4, 1);
@@ -160,7 +160,7 @@ describe('turret independence from the hull', () => {
     // The point of a rate-limited turret: spin the hull and the gun cannot keep up.
     //
     // The turret must be *slower* than the hull for this to mean anything. The placeholder's turret
-    // is faster than its hull, so it tracks perfectly — which is correct, and asserted separately
+    // is faster than its hull, so it tracks perfectly â€” which is correct, and asserted separately
     // below. A deliberately sluggish turret is used here so the mechanism's limit is the binding
     // constraint rather than the hull's.
     const sluggish = variantWith({ traverseDegPerSec: 6, traverseAccelDegPerSec2: 30 });
@@ -168,7 +168,7 @@ describe('turret independence from the hull', () => {
     const aimPoint = pointAt(0, 200);
 
     let hullHeading = 0;
-    const hullStepRad = (PLACEHOLDER_TANK.traversal.hullTraverseDegPerSec * DT * Math.PI) / 180;
+    const hullStepRad = (CT_MEDIUM.traversal.hullTraverseDegPerSec * DT * Math.PI) / 180;
     for (let i = 0; i < 240; i += 1) {
       hullHeading += hullStepRad;
       updateTurret(state, sluggish, hullHeading, ORIGIN, aimPoint, DT);
@@ -186,10 +186,10 @@ describe('turret independence from the hull', () => {
     const aimPoint = pointAt(0, 200);
 
     let hullHeading = 0;
-    const hullStepRad = (PLACEHOLDER_TANK.traversal.hullTraverseDegPerSec * DT * Math.PI) / 180;
+    const hullStepRad = (CT_MEDIUM.traversal.hullTraverseDegPerSec * DT * Math.PI) / 180;
     for (let i = 0; i < 240; i += 1) {
       hullHeading += hullStepRad;
-      updateTurret(state, PLACEHOLDER_TANK, hullHeading, ORIGIN, aimPoint, DT);
+      updateTurret(state, CT_MEDIUM, hullHeading, ORIGIN, aimPoint, DT);
     }
 
     // The target is itself moving one hull-step per tick, so the gun is always chasing a moving
@@ -210,7 +210,7 @@ describe('gun elevation', () => {
     // Aim at something far steeper than the gun's elevation limit.
     servoFor(state, pointAt(0, 100, 173), 10);
     expect(gunElevationDeg(state)).toBeLessThanOrEqual(
-      PLACEHOLDER_TANK.mainGun.maxElevationDeg + 1e-6,
+      CT_MEDIUM.mainGun.maxElevationDeg + 1e-6,
     );
   });
 
@@ -218,7 +218,7 @@ describe('gun elevation', () => {
     const state = createTurretState();
     servoFor(state, pointAt(0, 20, -20), 10);
     expect(gunElevationDeg(state)).toBeGreaterThanOrEqual(
-      -PLACEHOLDER_TANK.mainGun.maxDepressionDeg - 1e-6,
+      -CT_MEDIUM.mainGun.maxDepressionDeg - 1e-6,
     );
   });
 
@@ -237,9 +237,9 @@ describe('gun elevation', () => {
   it('never slews faster than the configured elevation rate', () => {
     const state = createTurretState();
     for (let i = 0; i < 600; i += 1) {
-      updateTurret(state, PLACEHOLDER_TANK, 0, ORIGIN, pointAt(0, 100, 50), DT);
+      updateTurret(state, CT_MEDIUM, 0, ORIGIN, pointAt(0, 100, 50), DT);
       expect(Math.abs(state.elevateRateDegPerSec)).toBeLessThanOrEqual(
-        PLACEHOLDER_TANK.mainGun.elevateRateDegPerSec + 1e-6,
+        CT_MEDIUM.mainGun.elevateRateDegPerSec + 1e-6,
       );
     }
   });

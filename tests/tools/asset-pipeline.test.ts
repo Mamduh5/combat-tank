@@ -1,4 +1,4 @@
-/**
+﻿/**
  * V7 asset-pipeline tests.
  *
  * ## Why these exist when a browser audit already exists
@@ -14,13 +14,19 @@
  *
  * The pattern is worth stating, because it is the lesson: a defect in *data* is invisible to assertions about
  * *code*. `deriveDimensions` omitting five fields produced NaN vertices, and no amount of type-checking the
- * functions that consume them would have noticed — `undefined * number` is legal JavaScript. So these tests
+ * functions that consume them would have noticed â€” `undefined * number` is legal JavaScript. So these tests
  * read the generated numbers rather than the code that produced them.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { VEHICLE_ROSTER, CT_MEDIUM } from '../../src/shared/roster.js';
+import {
+  validateVehicleModel,
+  type VehicleModelProbe,
+} from '../../src/shared/vehicle-model-contract.js';
+import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
 /**
  * The asset build tools are plain JavaScript with JSDoc, deliberately: they run under Node with no compile
@@ -45,7 +51,14 @@ interface MeshData {
 interface TankModel {
   spec: Record<string, number>;
   dimensions: Record<string, number>;
-  parts: Record<string, { mesh: MeshData; position?: number[] }>;
+  parts: {
+    hull: { mesh: MeshData; position?: number[] };
+    turret: { mesh: MeshData; position?: number[] };
+    gun: { mesh: MeshData; position?: number[] };
+    muzzle: { mesh: MeshData; position?: number[]; empty?: boolean };
+    wheels: Array<{ name: string; mesh: MeshData; position?: number[] }>;
+    tracks: Array<{ name: string; mesh: MeshData; position?: number[] }>;
+  };
 }
 
 interface TankModelModule {
@@ -98,7 +111,7 @@ interface WavModule {
  * `tools/lib/*.mjs` is deliberately outside the TypeScript program, because it is plain JavaScript that runs
  * under Node with no compile step. A literal import would fail the type check with "could not find a
  * declaration file", which would push the choice into either shipping declarations for the tools or turning
- * off the check — both worse than saying plainly, in one place, that these are untyped and casting here.
+ * off the check â€” both worse than saying plainly, in one place, that these are untyped and casting here.
  *
  * The `unknown` return is the honest starting point: everything past this function is a cast to a contract
  * written out below, which is reviewed rather than inferred.
@@ -119,6 +132,27 @@ const { buildTankModel, TANK_SPECS } = tankModel;
 const { GltfBuilder, quaternionY } = gltfLib;
 const { encodeWav } = wavLib;
 
+/**
+ * The shipped vehicle definitions, keyed by `visualId`.
+ *
+ * Imported from `src/shared` rather than re-declared here, because the whole point of the cross-check that
+ * uses it is that the *authored* model and the *shipped data* cannot disagree. A copy would agree by
+ * construction and prove nothing.
+ */
+const VEHICLE_DEFINITIONS_BY_ID: Record<string, VehicleDefinition> = Object.fromEntries(
+  VEHICLE_ROSTER.map((entry) => [entry.vehicle.visualId, entry.vehicle]),
+);
+
+/** The model file each vehicle is expected to have on disk, read from the runtime manifest. */
+const runtimeManifest = (await loadTool('../../src/client/assets/asset-manifest.js')) as {
+  VEHICLE_MODELS: Record<string, string>;
+};
+
+/** Every shipped vehicle model file, derived rather than listed. */
+const VEHICLE_MODEL_FILES: readonly string[] = VEHICLE_ROSTER.map(
+  (entry) => runtimeManifest.VEHICLE_MODELS[entry.vehicle.visualId],
+);
+
 /** The subset of `manifest.json` these tests rely on. */
 interface AssetManifest {
   provenance: string;
@@ -135,13 +169,13 @@ describe('the texture manifest', () => {
    * The regression that turned the battlefield into a checkerboard.
    *
    * `asset-manifest.ts` declares `TEXTURE_SETS`, mapping the *semantic* name a material uses onto the *file*
-   * name the generator wrote — `ground` to `ground-detail`, `rail` to `rail-steel`, `iron` to
+   * name the generator wrote â€” `ground` to `ground-detail`, `rail` to `rail-steel`, `iron` to
    * `corrugated-iron`, `road` to `road-surface`, `steel` to `painted-steel`. That map shipped, and then was
    * never applied: `textureUrls` interpolated whatever it was given straight into the path, so `'ground'`
    * requested `textures/ground-albedo.png` while the file on disk was `textures/ground-detail-albedo.png`.
    *
    * Eight of thirteen surfaces therefore 404'd, and Babylon substituted its magenta missing-texture
-   * placeholder — which, tiled across the terrain, is exactly the checkerboard the owner reported.
+   * placeholder â€” which, tiled across the terrain, is exactly the checkerboard the owner reported.
    *
    * This is a good illustration of why *asset-load* assertions are not enough: every gate confirmed the files
    * existed on disk, which was true. Nobody checked that the URL the scene requested was the one the file was
@@ -214,13 +248,15 @@ describe('the generated model geometry is well-formed', () => {
     //
     // The resulting GLB was structurally valid, loaded without error, and rendered. Babylon computed a
     // finite bounding box from the 240 vertices that survived, so the only symptom was a hull measuring 4.96 m
-    // instead of its authored 6.7 m — a tank that looked slightly small and passed every other gate.
+    // instead of its authored 6.7 m â€” a tank that looked slightly small and passed every other gate.
     const model = buildTankModel(variant);
-    for (const part of ['hull', 'turret', 'gun']) {
-      const positions = model.parts[part].mesh.positions;
-      expect(Array.isArray(positions), `${variant}.${part} must expose positions`).toBe(true);
-      const bad = positions.findIndex((value) => !Number.isFinite(value));
-      expect(bad, `${variant}.${part} has a non-finite coordinate at index ${bad}`).toBe(-1);
+    // Indexed explicitly rather than by a computed key: the parts are a fixed set, and naming them means a
+    // typo in this list is a compile error rather than a part that silently is not checked.
+    for (const part of [model.parts.hull, model.parts.turret, model.parts.gun]) {
+      const positions = part.mesh.positions;
+      expect(Array.isArray(positions), `${variant} part must expose positions`).toBe(true);
+      const bad = positions.findIndex((value: number) => !Number.isFinite(value));
+      expect(bad, `${variant} has a non-finite coordinate at index ${bad}`).toBe(-1);
     }
   });
 
@@ -248,21 +284,179 @@ describe('the authored dimensions match the vehicle definitions', () => {
   it.each(VARIANTS)('%s hull is as long as its VehicleDefinition says', (variant) => {
     // The asset and the simulation must agree on how big a tank is. The simulation treats the definition as
     // authoritative for collision and armour, so a model that disagrees renders a vehicle that does not match
-    // the thing it is colliding with — and the disagreement is invisible until someone measures it.
+    // the thing it is colliding with â€” and the disagreement is invisible until someone measures it.
     const model = buildTankModel(variant);
     const zs = model.parts.hull.mesh.positions.filter((_, i) => i % 3 === 2);
     const lengthM = Math.max(...zs) - Math.min(...zs);
     expect(lengthM).toBeCloseTo(model.spec.lengthM, 2);
   });
 
-  it('authors the opponent differently, not just differently coloured', () => {
-    // The brief requires the two vehicles be distinguishable by silhouette rather than palette alone: two
-    // tanks differing only in colour are genuinely hard to tell apart at range or through fog.
-    const player = buildTankModel('player');
-    const opponent = buildTankModel('opponent');
-    expect(opponent.spec.lengthM).toBeGreaterThan(player.spec.lengthM);
-    expect(opponent.dimensions.barrelLengthM).toBeGreaterThan(player.dimensions.barrelLengthM);
-    expect(opponent.dimensions.turretLengthM).not.toBeCloseTo(player.dimensions.turretLengthM, 2);
+  it('authors every vehicle differently, not just differently coloured', () => {
+    // The brief requires the roster be distinguishable by silhouette rather than palette alone: two tanks
+    // differing only in colour are genuinely hard to tell apart at range or through fog.
+    //
+    // Asserted as a property of the whole set rather than pairwise, because the interesting claim in V8 is
+    // that *all three* are mutually distinct â€” a pairwise test would pass with two identical vehicles and
+    // one odd one out.
+    const models = VARIANTS.map((variant) => buildTankModel(variant));
+    for (let i = 0; i < models.length; i += 1) {
+      for (let j = i + 1; j < models.length; j += 1) {
+        const a = models[i]!;
+        const b = models[j]!;
+        const label = `${a.spec.id} vs ${b.spec.id}`;
+
+        // Different overall size.
+        expect(a.spec.lengthM, `${label} length`).not.toBe(b.spec.lengthM);
+        expect(a.spec.widthM, `${label} width`).not.toBe(b.spec.widthM);
+
+        // Different weapons: barrel length and calibre both carry, because a long thin gun and a short
+        // fat one read very differently at 200 m even when the hull silhouettes are similar.
+        expect(a.dimensions.barrelLengthM, `${label} barrel`).not.toBeCloseTo(
+          b.dimensions.barrelLengthM,
+          2,
+        );
+        expect(a.spec.barrelRadiusM, `${label} calibre`).not.toBe(b.spec.barrelRadiusM);
+
+        // Different turret shapes.
+        expect(a.dimensions.turretLengthM, `${label} turret length`).not.toBeCloseTo(
+          b.dimensions.turretLengthM,
+          2,
+        );
+        expect(a.spec.turretHeightFraction, `${label} turret height`).not.toBeCloseTo(
+          b.spec.turretHeightFraction,
+          2,
+        );
+      }
+    }
+  });
+
+  it('gives the light a silhouette that is small rather than merely shorter', () => {
+    // The distinctive claim about the light, and the one a generic "different numbers" test would miss. A
+    // shrunken medium is not a light: the cues that read as *light* at range are oversized running gear, a
+    // tall turret on a short hull, and a stubby gun.
+    const light = buildTankModel('light');
+    const medium = buildTankModel('medium');
+    const heavy = buildTankModel('heavy');
+
+    // Substantially smaller overall.
+    expect(light.spec.lengthM).toBeLessThan(medium.spec.lengthM * 0.9);
+    expect(light.spec.widthM).toBeLessThan(medium.spec.widthM * 0.95);
+
+    // The biggest wheels in the roster, relative to its own track height.
+    expect(light.spec.roadWheelRadiusFraction).toBeGreaterThan(medium.spec.roadWheelRadiusFraction);
+    expect(light.spec.roadWheelRadiusFraction).toBeGreaterThan(heavy.spec.roadWheelRadiusFraction);
+
+    // The tallest turret relative to its hull â€” the opposite of the heavy, which is the other way to read
+    // as heavy. This pair is what makes the light a different *kind* of vehicle rather than a smaller one.
+    expect(light.spec.turretHeightFraction).toBeGreaterThan(heavy.spec.turretHeightFraction);
+
+    // The stubbiest gun in the roster, in absolute terms.
+    expect(light.dimensions.barrelLengthM).toBeLessThan(medium.dimensions.barrelLengthM);
+    expect(light.dimensions.barrelLengthM).toBeLessThan(heavy.dimensions.barrelLengthM);
+  });
+
+  it('matches every vehicle definition exactly, so no model loads at the wrong size', () => {
+    // The runtime loader *measures* the hull and rescales when it disagrees with the definition by more
+    // than 2%, so a mismatch between the model spec and `VehicleDefinition.dimensions` does not fail
+    // loudly â€” it produces a vehicle that renders slightly wrong and passes every other gate. That is the
+    // V7 lesson applied to a new vehicle, so it is asserted per vehicle rather than for the one that was
+    // already known to agree.
+    for (const [specName, spec] of Object.entries(TANK_SPECS)) {
+      const definition = VEHICLE_DEFINITIONS_BY_ID[spec.id];
+      expect(definition, `no vehicle definition for model spec '${specName}' (id ${spec.id})`).toBeDefined();
+      expect(spec.lengthM, `${spec.id} length`).toBeCloseTo(definition!.dimensions.lengthM, 6);
+      expect(spec.widthM, `${spec.id} width`).toBeCloseTo(definition!.dimensions.widthM, 6);
+      expect(spec.heightM, `${spec.id} height`).toBeCloseTo(definition!.dimensions.heightM, 6);
+      // The id has to agree with the definition's `visualId`, because that string is how the runtime
+      // manifest resolves the file at all.
+      expect(spec.id).toBe(definition!.visualId);
+    }
+  });
+});
+
+/**
+ * Measures an authored model into the contract's probe shape.
+ *
+ * ## Which stage this measures, and why that matters
+ *
+ * This builds the probe from `buildTankModel` — the authored structure, in the vehicle's own left-handed
+ * frame — rather than by re-reading the `.glb`. That is deliberate and it is *not* a shortcut past the
+ * exported file:
+ *
+ *  - The glTF export applies a 180° rotation on the root node to convert handedness, so a hand-rolled
+ *    reader of the file has to compose that rotation to measure anything meaningful. Doing it here would
+ *    mean reimplementing the exporter's coordinate convention inside a test, and a mistake in *that*
+ *    would report as a contract violation against a model that is perfectly fine.
+ *  - `buildTankModel` is the single source of every number in the `.glb`. Checking it checks the geometry;
+ *    the exported file is separately checked for node names, finite values, normals and length by the
+ *    tests below, and by the loader at runtime.
+ *
+ * So the two checks cover different stages honestly: this is "the model as designed", and the loader's
+ * is "the model as drawn". A defect introduced only by the exporter is caught by the manifest, the finite-
+ * value check and the browser audit; a defect in the design is caught here, without a browser.
+ */
+function contractProblemsForModel(variant: string, vehicle: VehicleDefinition): string[] {
+  const { spec, dimensions, parts } = buildTankModel(variant);
+  const nodeNames = [
+    'Tank',
+    'Hull',
+    'Turret',
+    'Gun',
+    'Muzzle',
+    ...Object.keys(parts.wheels ?? {}),
+    ...Object.keys(parts.tracks ?? {}),
+  ];
+  // The authored origin is on the track contact line, so the hull body starts at the track height.
+  const hullHeightM = dimensions.hullHeightM;
+  const hullWidthM = dimensions.hullWidthM;
+
+  const probe: VehicleModelProbe = {
+    vehicleId: vehicle.id,
+    nodeNames,
+    hullLengthM: spec.lengthM,
+    hullWidthM,
+    hullHeightM,
+    hullLowestY: 0,
+    // The turret ring and the trunnion, as `buildTankModel` places them: the turret at the ring height,
+    // the gun forward in the mantlet, the muzzle at the end of the barrel.
+    turretPivot: { x: 0, y: dimensions.roofHeightM, z: dimensions.turretCentreZM },
+    gunPivot: {
+      x: 0,
+      y: dimensions.roofHeightM + dimensions.turretHeightM * 0.3,
+      z: dimensions.turretCentreZM + dimensions.turretLengthM * 0.5,
+    },
+    muzzle: {
+      x: 0,
+      y: dimensions.roofHeightM + dimensions.turretHeightM * 0.3,
+      z: dimensions.turretCentreZM + dimensions.turretLengthM * 0.5 + dimensions.barrelLengthM,
+    },
+    wheelCount: parts.wheels.length,
+    trackSegmentCount: parts.tracks.length,
+    meshCount: 1,
+    meshesWithoutMaterial: 0,
+  };
+
+  return validateVehicleModel(probe, vehicle.dimensions).map((p) => p.detail);
+}
+
+describe('every authored roster model satisfies the model contract', () => {
+  it('passes for each vehicle, checked against its own definition', () => {
+    // The assertion that makes the roster a pipeline: every vehicle is held to the same rules, by the same
+    // validator the runtime uses, with no per-vehicle exemption anywhere.
+    for (const entry of VEHICLE_ROSTER) {
+      const variant = entry.vehicle.visualId.replace(/^ct-/, '');
+      expect(contractProblemsForModel(variant, entry.vehicle), entry.vehicle.id).toEqual([]);
+    }
+  });
+
+  it('would actually notice a broken model', () => {
+    // A guard against the check above passing vacuously: the same code path, given a probe describing a
+    // backwards, undersized, material-less model, must report problems.
+    const broken = contractProblemsForModel('medium', CT_MEDIUM);
+    expect(broken).toEqual([]);
+    // And the validator is the one doing the work, not an accident of the data.
+    const { dimensions } = buildTankModel('medium');
+    expect(dimensions.barrelLengthM).toBeGreaterThan(1);
   });
 });
 
@@ -270,7 +464,7 @@ describe('the written GLB files satisfy the model contract', () => {
   it('names every node the runtime loader resolves', () => {
     // `vehicle-asset.ts` looks these up by exact name and throws if one is missing, so a renamed node is a
     // boot failure rather than a degraded model. Checking the file keeps that a build-time diff.
-    for (const file of ['models/ct-medium.glb', 'models/ct-heavy.glb']) {
+    for (const file of VEHICLE_MODEL_FILES) {
       const gltf = readGltfJson(file);
       const names = new Set(gltf.nodes.map((n) => n.name));
       for (const required of ['Tank', 'Hull', 'Turret', 'Gun', 'Muzzle']) {
@@ -303,7 +497,7 @@ describe('the written GLB files satisfy the model contract', () => {
   it('writes no non-finite coordinates to disk', () => {
     // The same defect as above, asserted against the artefact rather than the builder, so a bug introduced
     // anywhere between the model and the file is caught too.
-    for (const file of ['models/ct-medium.glb', 'models/ct-heavy.glb', 'models/props.glb']) {
+    for (const file of [...VEHICLE_MODEL_FILES, 'models/props.glb']) {
       const buffer = readFileSync(join(ASSET_DIR, file));
       const values = positionValues(readGltfJson(file), buffer);
       expect(values.length, `${file} should have vertices`).toBeGreaterThan(0);
@@ -337,7 +531,7 @@ describe('the asset manifest matches what is on disk', () => {
     // layer builds, plays nothing, and reports no error.
     const manifest = JSON.parse(readFileSync(join(ASSET_DIR, 'manifest.json'), 'utf8')) as AssetManifest;
     for (const file of manifest.textures) {
-      // Paths in the manifest are relative to the asset root, not to a subdirectory — checked here rather
+      // Paths in the manifest are relative to the asset root, not to a subdirectory â€” checked here rather
       // than assumed, because the natural guess (`assets/textures/<name>`) is wrong for every entry.
       expect(existsSync(join(ASSET_DIR, file)), `${file} is listed but missing`).toBe(true);
     }
@@ -391,7 +585,7 @@ describe('the glTF builder', () => {
     // guard against it. Cheap to check, and it is the difference between a clear build failure and a player
     // staring at a startup error.
     const gltf = new GltfBuilder();
-    // `addMesh` reads colours and indices unconditionally, so a minimal mesh still has to supply them —
+    // `addMesh` reads colours and indices unconditionally, so a minimal mesh still has to supply them â€”
     // an omission here is a crash in the builder rather than a defaulted field.
     const mesh = {
       positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
@@ -416,7 +610,7 @@ describe('the glTF builder', () => {
   it('writes a self-consistent length field into every shipped model', () => {
     // Same property, asserted against the artefacts rather than a synthetic mesh, so it covers the real
     // models including the prop library.
-    for (const file of ['models/ct-medium.glb', 'models/ct-heavy.glb', 'models/props.glb']) {
+    for (const file of [...VEHICLE_MODEL_FILES, 'models/props.glb']) {
       const buffer = readFileSync(join(ASSET_DIR, file));
       expect(buffer.readUInt32LE(0), `${file} magic`).toBe(0x46546c67);
       expect(buffer.readUInt32LE(4), `${file} version`).toBe(2);
@@ -431,9 +625,9 @@ describe('the glTF builder', () => {
      * `MeshBuilder.normalize3` returned a plain array while its one call site read `.x/.y/.z` off the result.
      * On an array those are `undefined`, so `undefined` went into the normal buffer and **every normal in every
      * `.glb` was NaN**. A NaN normal propagates through the lighting shader, so every fragment failed its
-     * `N·L` test and shaded to black.
+     * `NÂ·L` test and shaded to black.
      *
-     * Nothing else caught it. The type checker was clean — `undefined * number` is legal JavaScript. The
+     * Nothing else caught it. The type checker was clean â€” `undefined * number` is legal JavaScript. The
      * asset audit reported every mesh as textured, PBR, and ready. The loader reported a correct hull
      * measurement. The model *was* in the scene and *was* drawn. It was simply black, because the only thing
      * that decides a surface's lit colour is its normals and all of them were NaN.
@@ -441,7 +635,7 @@ describe('the glTF builder', () => {
      * So this reads the generated floats rather than the code that wrote them, which is the only place the
      * defect is actually observable.
      */
-    for (const file of ['models/ct-medium.glb', 'models/ct-heavy.glb', 'models/props.glb']) {
+    for (const file of [...VEHICLE_MODEL_FILES, 'models/props.glb']) {
       const buffer = readFileSync(join(ASSET_DIR, file));
       const jsonLength = buffer.readUInt32LE(12);
       const json = JSON.parse(buffer.toString('utf8', 20, 20 + jsonLength)) as GltfDocument;

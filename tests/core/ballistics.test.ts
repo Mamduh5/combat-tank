@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   createShell,
   GRAVITY_MPS2,
@@ -9,7 +9,7 @@ import { computeIncidenceAngleDeg } from '../../src/core/ballistics/impact.js';
 import { ShellFlightSystem } from '../../src/core/ballistics/flight-system.js';
 import { Terrain } from '../../src/core/world/terrain.js';
 import { vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import type { TestShellDefinition } from '../../src/shared/vehicle-definition.js';
 
 /**
@@ -23,19 +23,19 @@ import type { TestShellDefinition } from '../../src/shared/vehicle-definition.js
  *     client being able to agree about where a shell is (ADR-0001, ADR-0005).
  *
  * These are sanity checks on a physically coherent model, not a ballistics research suite. The
- * tolerances are loose relative to the model's real accuracy, chosen to catch *structural* errors — a
- * wrong sign, a missing gravity term, a shell that never lands — rather than to police integration
+ * tolerances are loose relative to the model's real accuracy, chosen to catch *structural* errors â€” a
+ * wrong sign, a missing gravity term, a shell that never lands â€” rather than to police integration
  * error.
  */
 
-const SHELL = PLACEHOLDER_TANK.mainShell;
+const SHELL = CT_MEDIUM.mainShell;
 const DT = 1 / 60;
 
 /**
  * A shell with the range limit lifted, for tests that are about ballistics rather than the range cap.
  *
  * The shipped test shell is limited to 2500 m, and a level shot from 400 m needs over 7000 m of
- * travel before it reaches the ground — so it correctly *expires* rather than landing. That is the
+ * travel before it reaches the ground â€” so it correctly *expires* rather than landing. That is the
  * right behaviour and has its own test below, but it would mask every other assertion here.
  */
 const LONG_RANGE_SHELL: TestShellDefinition = {
@@ -278,7 +278,7 @@ describe('computeIncidenceAngleDeg', () => {
     // Guards the sign convention, which is the mistake this function is most likely to make.
     //
     // Only downward-travelling directions are sampled. A shell heading *upward* is reversed to
-    // downward for the measurement and would legitimately give an angle above 90 — but such a shell
+    // downward for the measurement and would legitimately give an angle above 90 â€” but such a shell
     // never produces a ground impact, so it is outside the contract this function serves.
     for (let i = 0; i <= 180; i += 1) {
       const a = (i / 180) * Math.PI;

@@ -1,16 +1,16 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { LongitudinalModel, moveToward } from '../../src/core/vehicle/locomotion.js';
 import { Simulation, TICK_DT_SECONDS } from '../../src/core/sim/world.js';
 import { Terrain } from '../../src/core/world/terrain.js';
 import { makeInput } from '../../src/shared/input.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
 
 /**
  * Locomotion tests.
  *
  * The central V1 criterion is that the vehicle "accelerates, reverses and turns at rates consistent
- * with its data definition — not with hard-coded constants in code". These tests establish that by
+ * with its data definition â€” not with hard-coded constants in code". These tests establish that by
  * running the *same* simulation code against two different definitions and asserting the measured
  * behaviour follows the data. If someone hard-coded a top speed, the second vehicle would behave
  * identically and this suite would fail.
@@ -22,7 +22,7 @@ import type { VehicleDefinition } from '../../src/shared/vehicle-definition.js';
  * Overrides are spread into each of the three sections, so a single flat list of names is enough
  * for a test to express "a vehicle with these different characteristics". The spread carries
  * unrelated keys into the other sections, which is harmless here because the validator and the
- * simulation only read the keys they know about — but it does mean this helper is for *tests*, not
+ * simulation only read the keys they know about â€” but it does mean this helper is for *tests*, not
  * for building real definitions.
  */
 function variantWith(overrides: {
@@ -39,12 +39,12 @@ function variantWith(overrides: {
   climbSpeedRetention?: number;
 }): VehicleDefinition {
   return {
-    ...PLACEHOLDER_TANK,
+    ...CT_MEDIUM,
     id: 'test-variant',
     displayName: 'Test Variant',
-    powertrain: { ...PLACEHOLDER_TANK.powertrain, ...overrides },
-    traversal: { ...PLACEHOLDER_TANK.traversal, ...overrides },
-    ground: { ...PLACEHOLDER_TANK.ground, ...overrides },
+    powertrain: { ...CT_MEDIUM.powertrain, ...overrides },
+    traversal: { ...CT_MEDIUM.traversal, ...overrides },
+    ground: { ...CT_MEDIUM.ground, ...overrides },
   };
 }
 
@@ -66,7 +66,7 @@ function topSpeedAfter(def: VehicleDefinition, seconds: number, throttle: number
 const FLAT_TERRAIN = { seed: 1, halfSizeM: 400, amplitudeM: 0, edgeRiseM: 0 };
 
 describe('LongitudinalModel', () => {
-  const def = PLACEHOLDER_TANK;
+  const def = CT_MEDIUM;
 
   it('derives acceleration from the definition force and mass, not a constant', () => {
     const light = new LongitudinalModel(variantWith({ massKg: 16_000, driveForceN: 78_000 }));
@@ -165,8 +165,8 @@ describe('vehicle acceleration follows its definition', () => {
   it('takes noticeably longer to reach speed than to stop from it', () => {
     // This is the "weight" the vision document asks for, expressed as a measurable property. The
     // vehicle's drive acceleration is deliberately much lower than its brake rate, so starting is
-    // a commitment and stopping is decisive — which is how a tracked vehicle actually behaves.
-    const def = PLACEHOLDER_TANK;
+    // a commitment and stopping is decisive â€” which is how a tracked vehicle actually behaves.
+    const def = CT_MEDIUM;
     const driveAccel = def.powertrain.driveForceN / def.powertrain.massKg;
     const sim = new Simulation({ vehicle: def, terrain: FLAT_TERRAIN });
 
@@ -239,7 +239,7 @@ describe('hull traverse follows its definition', () => {
 
   it('rotates the hull only when asked, never automatically toward the camera', () => {
     // OD-02 settled direct WASD control: with no turn input the heading must not change at all.
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, terrain: FLAT_TERRAIN });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, terrain: FLAT_TERRAIN });
     sim.runTicks(600, makeInput(1, 0));
     expect(sim.vehicle.state.headingRad).toBeCloseTo(0, 6);
 
@@ -249,7 +249,7 @@ describe('hull traverse follows its definition', () => {
   });
 
   it('turns the hull while stationary, as a real tracked vehicle can', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, terrain: FLAT_TERRAIN });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, terrain: FLAT_TERRAIN });
     const startX = sim.vehicle.state.position.x;
     const startZ = sim.vehicle.state.position.z;
 
@@ -281,7 +281,7 @@ describe('hull traverse follows its definition', () => {
 describe('terrain interaction', () => {
   it('keeps the vehicle sitting exactly on the ground surface', () => {
     const terrain = new Terrain();
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     sim.runTicks(400, makeInput(1, 1));
 
     const state = sim.vehicle.state;
@@ -294,16 +294,16 @@ describe('terrain interaction', () => {
   });
 
   it('settles ride height to the definition ground clearance on flat ground', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK, terrain: FLAT_TERRAIN });
+    const sim = new Simulation({ vehicle: CT_MEDIUM, terrain: FLAT_TERRAIN });
     sim.runTicks(600, makeInput(0, 0));
     expect(sim.vehicle.state.rideHeightM).toBeCloseTo(
-      PLACEHOLDER_TANK.dimensions.groundClearanceM,
+      CT_MEDIUM.dimensions.groundClearanceM,
       3,
     );
   });
 
   it('never falls through the terrain while driving over varied ground', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     // Drive a long way in several directions and check clearance every tick. A vehicle that dips
     // below the surface even briefly is the classic ground-collision bug.
     for (let leg = 0; leg < 4; leg += 1) {
@@ -334,16 +334,16 @@ describe('terrain interaction', () => {
     // Slope resistance is asymmetric by design: only a climb costs speed, so descending is free.
     // This is asserted against a *known* gradient rather than the procedural terrain, so the test
     // checks the model rather than hunting for a convenient spot on a hill.
-    const steepClimb = new LongitudinalModel(PLACEHOLDER_TANK);
+    const steepClimb = new LongitudinalModel(CT_MEDIUM);
 
     // 20 degrees of climb, derived from the definition rather than hard-coded.
-    const climbDeg = PLACEHOLDER_TANK.ground.maxClimbDeg * 0.7;
+    const climbDeg = CT_MEDIUM.ground.maxClimbDeg * 0.7;
     const descentDeg = -climbDeg;
 
     expect(steepClimb.speedLimit(climbDeg)).toBeLessThan(steepClimb.speedLimit(0));
     // A descent is not penalised at all: the limit is the flat speed or a small bonus.
     expect(steepClimb.speedLimit(descentDeg)).toBeGreaterThanOrEqual(
-      PLACEHOLDER_TANK.powertrain.maxSpeedMps,
+      CT_MEDIUM.powertrain.maxSpeedMps,
     );
 
     // And the gradient itself is reported as zero downhill, one-sided by construction.
@@ -361,7 +361,7 @@ describe('terrain interaction', () => {
   });
 
   it('keeps the vehicle inside the play area over a long drive', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     sim.runTicks(6000, makeInput(1, 0));
 
     // The boundary is inclusive: the vehicle is clamped to exactly the limit, not inside it.
@@ -371,7 +371,7 @@ describe('terrain interaction', () => {
   });
 
   it('stops at the boundary instead of grinding along it', () => {
-    const sim = new Simulation({ vehicle: PLACEHOLDER_TANK });
+    const sim = new Simulation({ vehicle: CT_MEDIUM });
     sim.runTicks(20_000, makeInput(1, 0));
 
     // Once pinned to the edge, forward motion must not resume: a vehicle that slides along the

@@ -35,6 +35,26 @@ export interface VehicleState {
 export interface VehicleInit {
   readonly position: Vec3;
   readonly headingRad: number;
+
+  /**
+   * Identity of *this* vehicle instance, added in V8.
+   *
+   * Distinct from `VehicleDefinition.id`, which names a vehicle **type**. The shell system uses this to
+   * stop a shell striking the vehicle that fired it, and the combat resolver uses it to route a hit to
+   * the right tank, so it must be unique among the vehicles present in one battle.
+   *
+   * It cannot simply be the definition id, and V8 is the version that proved why. "Medium vs medium" is
+   * an explicitly required matchup, and with two vehicles sharing an id every shell the opponent fired
+   * was excluded from colliding with the player by its own self-exclusion rule: the shells passed
+   * straight through, landed 165 m past, and the opponent's combat-feedback loop never received a
+   * result — so it probed forever and never flanked. Nothing about that reads as an id collision from
+   * the outside; it presents as an AI that has stopped working.
+   *
+   * Optional, defaulting to the definition id, because the overwhelming majority of callers construct a
+   * single vehicle and have no reason to think about this. `Simulation` supplies a distinct value for
+   * the opponent, which is the only place two of them coexist.
+   */
+  readonly instanceId?: string;
 }
 
 /**

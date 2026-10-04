@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { Simulation } from '../../src/core/sim/world.js';
 import { Battle } from '../../src/core/battle/battle.js';
 import { Tank } from '../../src/core/vehicle/tank.js';
@@ -6,8 +6,7 @@ import { Terrain, ARENA_COVER, COVER_MAX_SLOPE_RATIO } from '../../src/core/worl
 import { applyPenetration, findModule } from '../../src/core/damage/damage-model.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
 import { vec3 } from '../../src/shared/vec3.js';
-import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
-import { ENEMY_TANK } from '../../src/shared/enemy-tank.js';
+import { CT_MEDIUM } from '../../src/shared/roster.js';
 
 /**
  * V4 tests: the first real encounter.
@@ -17,9 +16,29 @@ import { ENEMY_TANK } from '../../src/shared/enemy-tank.js';
  * private rule set, and most of what follows is an attempt to make that fail loudly if it regresses.
  */
 
-/** A simulation with the real V4 opponent. */
+/**
+ * A like-for-like duel: the medium against the medium.
+ *
+ * ## Why this is deliberately a mirror match
+ *
+ * Every test in this file is about **symmetry of rules** — that the opponent is stepped through the same
+ * `InputCommand`, the same reload cycle, the same ballistics and the same armour model as the player. That
+ * claim is about the *rules*, not about any particular vehicle, so the vehicle is chosen to be the one the
+ * assertions were written against.
+ *
+ * This matters because of a real property of the V8 roster, which V8 had to discover rather than assume.
+ * `CT_HEAVY` fires a 285 mm shell at 0.62 normalisation, which presents ~438 mm against the medium's
+ * 400 mm frontal plate: **the heavy's gun defeats a parked medium head-on.** That is a sensible result for
+ * a heavy and it is pinned separately in `tests/core/roster-matchups.test.ts`, but it makes the heavy a
+ * poor opponent for tests that need the player's frontal plate to be *unpenetrable*, and its 7.5 s reload
+ * against the medium's 4.5 s stretches every time budget in this file by two thirds.
+ *
+ * Both effects are properties of the heavy, not defects in the rules. So the rule-symmetry tests run
+ * medium-against-medium, where their original time constants and armour assumptions hold exactly, and the
+ * roster's own matchups are tested where they belong.
+ */
 function duel(seed = 12345) {
-  return new Simulation({ vehicle: PLACEHOLDER_TANK, target: ENEMY_TANK, enemySeed: seed });
+  return new Simulation({ vehicle: CT_MEDIUM, target: CT_MEDIUM, enemySeed: seed });
 }
 
 /** Runs a whole battle to a terminal state or the tick limit. Returns what happened. */
@@ -152,8 +171,8 @@ describe('restart', () => {
 
     expect(battle.state).toBe('ready');
     expect(simulation.tickCount).toBe(0);
-    expect(simulation.vehicle.damage.hitPoints).toBe(PLACEHOLDER_TANK.survivability.hitPoints);
-    expect(simulation.target!.damage.hitPoints).toBe(ENEMY_TANK.survivability.hitPoints);
+    expect(simulation.vehicle.damage.hitPoints).toBe(CT_MEDIUM.survivability.hitPoints);
+    expect(simulation.target!.damage.hitPoints).toBe(CT_MEDIUM.survivability.hitPoints);
     expect(simulation.vehicle.gunState.shotsFired).toBe(0);
     expect(simulation.target!.gunState.shotsFired).toBe(0);
     expect(simulation.vehicle.state.position.x).toBeCloseTo(openingPlayer.x, 6);
@@ -283,7 +302,7 @@ describe('the opponent fights through the same rules as the player', () => {
     // V4 recorded the opposite: a player who parked square-on was unhittable, the opponent emptied
     // magazines into a 200 mm plate pitched at 60 degrees, and the fight never resolved. That was OD-11.
     //
-    // The owner's resolution was explicit — *do not weaken the armour*. The plate still stops 150 mm of
+    // The owner's resolution was explicit â€” *do not weaken the armour*. The plate still stops 150 mm of
     // penetration cleanly, and it still will, because no armour value changed in V5. What changed is
     // that the opponent now recognises the shot is hopeless, stops paying five-second reloads for it,
     // and goes around to the flank.
@@ -376,17 +395,17 @@ describe('the opponent fights through the same rules as the player', () => {
     // Applied through the real damage model, from a rear-facing penetration point, repeatedly until the
     // tank is actually destroyed. One application is 150 HP against 900, which is not a kill.
     let report = applyPenetration(
-      ENEMY_TANK,
+      CT_MEDIUM,
       enemy.damage,
       vec3(0, 0.6, -2.4),
       enemy.state.position,
       enemy.state.headingRad,
       enemy.state.headingRad,
     );
-    expect(report.vehicleDamage).toBe(ENEMY_TANK.survivability.damagePerPenetration);
+    expect(report.vehicleDamage).toBe(CT_MEDIUM.survivability.damagePerPenetration);
     while (!enemy.damage.destroyed) {
       report = applyPenetration(
-        ENEMY_TANK,
+        CT_MEDIUM,
         enemy.damage,
         vec3(0, 0.6, -2.4),
         enemy.state.position,
@@ -400,7 +419,7 @@ describe('the opponent fights through the same rules as the player', () => {
     for (let i = 0; i < 120; i += 1) {
       battle.tick(NEUTRAL_INPUT);
     }
-    // A wreck is not under power, and that is what is asserted — via the opponent's own intent rather
+    // A wreck is not under power, and that is what is asserted â€” via the opponent's own intent rather
     // than through a speed threshold.
     //
     // The earlier version of this test asserted `speedMps < 2`, which reads as though coasting to a stop
@@ -458,7 +477,7 @@ describe('the opponent fights through the same rules as the player', () => {
 describe('track damage has a gameplay consequence', () => {
   /** A fresh player tank on flat ground, for isolating locomotion. */
   function flatTank() {
-    return new Tank(PLACEHOLDER_TANK, { position: vec3(0, 0, 0), headingRad: 0 });
+    return new Tank(CT_MEDIUM, { position: vec3(0, 0, 0), headingRad: 0 });
   }
 
   const flatTerrain = { seed: 1, halfSizeM: 2000, amplitudeM: 0, edgeRiseM: 0 };
@@ -481,7 +500,7 @@ describe('track damage has a gameplay consequence', () => {
     track.destroyed = true;
 
     const speed = topSpeedAfter(tank, 300);
-    expect(speed).toBeLessThan(PLACEHOLDER_TANK.powertrain.maxSpeedMps * 0.6);
+    expect(speed).toBeLessThan(CT_MEDIUM.powertrain.maxSpeedMps * 0.6);
     expect(speed).toBeGreaterThan(0);
   });
 
@@ -587,7 +606,7 @@ describe('the arena', () => {
 
 describe('the encounter as a whole', () => {
   it('keeps a passive player under fire rather than letting them ignore the fight', () => {
-    // A player who does nothing should still be shot at — the opponent has to be *doing* something, or
+    // A player who does nothing should still be shot at â€” the opponent has to be *doing* something, or
     // the second tank is scenery. What is not asserted is that parking kills them: against a frontal
     // plate pitched 60 degrees, it does not, and pretending otherwise would be asserting a balance
     // decision this codebase has not made.
@@ -610,7 +629,7 @@ describe('the encounter as a whole', () => {
     });
 
     expect(result.simulation.target!.damage.hitPoints).toBeLessThan(
-      ENEMY_TANK.survivability.hitPoints,
+      CT_MEDIUM.survivability.hitPoints,
     );
   });
 });
