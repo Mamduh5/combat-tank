@@ -428,12 +428,33 @@ export class MeshBuilder {
   }
 }
 
-/** Unit-length vector, falling back to +Y for a degenerate input rather than emitting NaNs. */
+/**
+ * Unit-length `Vector3`, falling back to +Y for a degenerate input rather than emitting NaNs.
+ *
+ * ## Why the return type matters here
+ *
+ * This previously returned a plain array `[x, y, z]`, and the single call site in `vertex()` then read
+ * `n.x`, `n.y`, `n.z` off it. On an array those are all `undefined`, so `undefined` was pushed straight into
+ * the normal buffer and every normal in every generated `.glb` was `NaN`.
+ *
+ * The visible consequence was a tank that rendered as a solid black silhouette: a NaN normal propagates
+ * through the lighting shader, so every fragment failed its `N·L` test and shaded to black. It type-checked,
+ * the asset audit reported the meshes as textured and PBR, `isReady()` was true, and the model loaded with a
+ * correct hull measurement — because nothing about *loading* a model exercises the normals' values.
+ *
+ * Returning a real `Vector3` makes the two representations interchangeable at the call site, so the mistake
+ * cannot recur in the same silent way.
+ */
 function normalize3(v) {
-  const length = Math.hypot(v.x ?? v[0], v.y ?? v[1], v.z ?? v[2]);
-  if (length < 1e-9) {
-    return [0, 1, 0];
+  const x = v.x ?? v[0];
+  const y = v.y ?? v[1];
+  const z = v.z ?? v[2];
+  const length = Math.hypot(x, y, z);
+  if (!Number.isFinite(length) || length < 1e-9) {
+    // A non-finite input is treated the same as a degenerate one: emit a usable normal rather than
+    // propagating the bad value into every downstream vertex.
+    return new Vector3(0, 1, 0);
   }
-  return [(v.x ?? v[0]) / length, (v.y ?? v[1]) / length, (v.z ?? v[2]) / length];
+  return new Vector3(x / length, y / length, z / length);
 }
 

@@ -109,6 +109,35 @@ Prints the range and bearing between the two spawns, whether contact exists at s
 opens line of sight, and a survey of candidate opponent spawns ranked by how quickly they would be found. This
 is what the V6 spawn pair was measured with, rather than designed on paper.
 
+## The runtime gate
+
+```
+npm run runtime           # full gate: build, boot the real page, play it for ~60s
+npm run runtime:quick     # same, with a 15s play window, for a faster signal
+```
+
+This is the check that matters most, and it is the one V7 was missing. It builds the game, serves the real
+bundle, opens a real browser, feeds the game real keyboard input, and then plays for a minute: movement,
+steering, camera, turret traverse in both directions, audio unlock and decode, firing, voice accounting,
+62 seconds of continuous play, and a restart followed by more play. It writes `runtime-report.json` and a
+screenshot, and **exits non-zero** if any check fails, any request 404s, or the page throws.
+
+That last part is the point. Every earlier harness here printed a report and exited 0, which makes it a
+diagnostic rather than a gate — and a green diagnostic is exactly what V7 shipped alongside four defects a
+player could see in ten seconds. It fails on three independent signals, because each catches things the others
+cannot: the mechanical assertions, uncaught exceptions and unhandled rejections, and failed network requests.
+The third exists because the checkerboard's eight 404s sat in the console the entire time, unremarked.
+
+Two design points worth knowing before extending it:
+
+- **Checks poll for their effect, they do not sleep for a fixed span.** The software renderer runs at ~4 fps and
+  the game advances the simulation by a clamped delta per frame, so a wall-clock wait buys much less simulated
+  time than it appears to. The first version of this probe asserted on distances after fixed waits and reported
+  two false defects against a tank that was working perfectly. `until(predicate, maxMs)` polls and always has a
+  ceiling, so a broken build fails instead of hanging.
+- **It asserts mechanics, not taste.** Whether the tank *looks* right and the audio *sounds* right is the
+  owner's call. A gate that claimed to judge those would be worse than no gate at all.
+
 ## In-page scripts
 
 Passed with `--script`, evaluated in the page against `globalThis.__combatTank`, which exposes the
@@ -123,6 +152,12 @@ simulation, scene, HUD, and visuals for inspection.
 
 The game also exposes `setInputFrame(frame)`, which overrides real input for a frame so firing can be
 tested without a captured pointer. It is `null` during normal play.
+
+Two diagnostics from the V7 recovery are kept rather than deleted, because they are cited from the source as
+the *evidence* for a fix rather than as a claim about one: `webaudio-semantics-probe.js` establishes Web
+Audio's buffer-assignment rules directly, and `audio-analysis.mjs` measures the shipped WAVs. Both findings
+are now also asserted permanently — the voice ceiling and drain on every gate run — so these corroborate
+rather than stand alone.
 
 ## Caveats
 

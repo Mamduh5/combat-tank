@@ -27,10 +27,10 @@
  * away. The player's own engine and tracks are deliberately **not** spatialised: they are at the camera, so
  * panning them would add nothing but an artefact.
  *
- * **Bounded voices.** One-shots play through a small pool of reusable sources. A shot in a long firefight, or
- * several impacts in one frame, must not allocate a new `AudioBufferSourceNode` each time — that is a
- * frame-time spike at exactly the moment the game should be smoothest, and it is how a naive implementation
- * ends up with a dozen overlapping gunshots louder than intended.
+ * **Bounded voices.** One-shots play under a ceiling on simultaneous voices, not an unbounded pile. A shot in
+ * a long firefight, or several impacts in one frame, must not stack into a dozen overlapping gunfires louder
+ * than intended — and they must not accumulate live nodes either, which is why `OneShotVoices` disconnects
+ * each source on `ended` and tracks how many are live.
  *
  * ## Browser constraints
  *
@@ -143,8 +143,10 @@ export interface EngineInput {
 class LoopVoice {
   private readonly gains: GainNode[] = [];
   private readonly sources: AudioBufferSourceNode[] = [];
-  private readonly started = false;
-  private readonly targetGains: number[] = [];
+  /** Guards against a second `start()`, which the spec forbids and which throws. */
+  private started = false;
+  /** The authored level for each layer, so a caller can fade a loop without knowing its layer count. */
+  private readonly baseGains: number[] = [];
   /** Detune in semitones, applied on top of playback rate. */
   private pitchScale = 1;
   /** The first layer's current level, so callers can fade a loop to silence without knowing its layers. */
@@ -173,7 +175,7 @@ class LoopVoice {
 
       this.gains.push(gain);
       this.sources.push(source);
-      this.targetGains.push(baseGains[index] ?? 0);
+      this.baseGains.push(baseGains[index] ?? 0);
     });
   }
 
@@ -182,6 +184,9 @@ class LoopVoice {
     if (this.started) {
       return;
     }
+    // Set *before* starting: `AudioBufferSourceNode.start()` throws if called twice, and this is the flag
+    // that makes "safe to call more than once" true rather than aspirational.
+    this.started = true;
     for (const source of this.sources) {
       source.start();
     }
@@ -199,7 +204,16 @@ class LoopVoice {
     const k = Math.min(1, AUDIO_TUNING.engineFadeRate * Math.max(0, dtSeconds));
     for (let i = 0; i < this.gains.length; i += 1) {
       const current = this.gains[i]!.gain.value;
-      const target = weights[i] ?? 0;
+      /**
+       * The per-frame weight is scaled by the layer's authored base gain.
+       *
+       * The base gains were collected in the constructor and then never read: the weight was written to the
+       * gain node raw. So every loop ran at unity regardless of the level it was built with, and a caller's
+       * decision about how loud a loop should be had no effect at all. `weights` is a *balance* between
+       * layers; `baseGains` is how loud the loop is overall. Multiplying them is what makes both mean
+       * something.
+       */
+      const target = (weights[i] ?? 0) * this.baseGains[i];
       this.gains[i]!.gain.value = current + (target - current) * k;
     }
     this.level = this.gains[0]?.gain.value ?? 0;
@@ -273,43 +287,114 @@ function enginePitchScale(input: EngineInput): number {
 
 
 /**
- * One playing one-shot, reclaimed when it finishes.
+ * One-shot playback.
  *
- * The pool exists for the reason given at the top of this file: allocating a source node per shot is a
- * frame-time spike exactly when the game should be smoothest.
+ * ## Why this creates a node per shot instead of pooling
+ *
+ * V7 pooled `AudioBufferSourceNode`s and recycled them, on the reasonable-sounding theory that allocating a
+ * node per shot is a frame-time spike. That theory is wrong in a way only the runtime reveals, and it made
+ * the game crash.
+ *
+ * An `AudioBufferSourceNode` is **single-use**. The spec says its `buffer` may be assigned once and its
+ * `start()` called once, and the first restriction turns out to be absolute: once a non-null buffer has been
+ * assigned, setting `buffer = null` does *not* make the node reusable. Assigning a second buffer throws
+ * `InvalidStateError` — verified directly rather than assumed, with the probe kept in
+ * `tools/webaudio-semantics-probe.js`:
+ *
+ * | Sequence | Result |
+ * |---|---|
+ * | fresh node -> assign buffer | ok |
+ * | assign buffer twice | throws |
+ * | assign, set `null`, reassign | **throws** |
+ * | assign, start, stop, `null`, reassign | **throws** |
+ * | node already ended, reassign | **throws** |
+ *
+ * A recycled node therefore can never carry a second sound, however carefully it is reset. The pool's only
+ * possible behaviour was to exhaust itself and then throw — which it did, from inside the render loop's fire
+ * handler, stopping every frame. That is the "crash after five seconds" the owner reported: a gun report claims
+ * four voices (crack, blast, thump, tail), so an eight-voice pool was spent in two shots.
+ *
+ * Creating a node per shot is not the expensive operation pooling was meant to avoid. A
+ * `AudioBufferSourceNode` is a thin handle over the already-decoded `AudioBuffer`, and the sound data is
+ * uploaded once at decode time and shared. Once `onended` fires and the node is disconnected it is garbage.
+ * The genuinely expensive parts of this graph — the decoded buffers, the limiter, the persistent gains — are
+ * all still shared.
+ *
+ * What pooling *did* buy is kept, because it was the useful half: a ceiling on simultaneous voices, so a
+ * firefight cannot stack into a wall of sound. `activeCount` exposes it and the runtime gate asserts it.
  */
-class VoicePool {
-  private readonly sources: AudioBufferSourceNode[] = [];
-  private readonly free: number[] = [];
-  private next = 0;
-
-  constructor(context: AudioContext, size: number) {
-    for (let i = 0; i < size; i += 1) {
-      this.sources.push(context.createBufferSource());
-      this.free.push(i);
-    }
-  }
+class OneShotVoices {
+  /** Currently-sounding one-shots. Decremented on `onended`, so a true count rather than an estimate. */
+  private live = 0;
+  /** The high-water mark, so a gate can detect saturation rather than merely seeing a large number. */
+  private peak = 0;
 
   /**
-   * Claims a voice, or steals the oldest if all are busy.
+   * Ceiling on simultaneous one-shots.
    *
-   * Stealing the oldest rather than dropping the new sound is deliberate: the newest event is what the player
-   * most needs to hear — their shot, the hit they just scored — so an older sound is the right one to lose.
+   * Eight, matching the pool V7 used, so the mix is unchanged — but now a ceiling rather than a supply.
    */
-  claim(): { source: AudioBufferSourceNode; gain: GainNode } {
-    const index = this.free.pop();
-    if (index !== undefined) {
-      const source = this.sources[index]!;
-      const gain = source.context.createGain();
-      return { source, gain };
+  static readonly MAX_CONCURRENT = 8;
+
+  /**
+   * Plays one buffer once.
+   *
+   * @param destination the bus to feed — the plain one for the player's own sounds, the spatial one otherwise
+   * @param delaySeconds start offset, used to place the gun report's tail after the crack
+   * @returns whether it started; `false` means the voice cap was reached and it was dropped
+   */
+  play(
+    context: AudioContext,
+    buffer: AudioBuffer,
+    level: number,
+    destination: AudioNode,
+    delaySeconds = 0,
+  ): boolean {
+    if (this.live >= OneShotVoices.MAX_CONCURRENT) {
+      // Dropping the newest is right here. The loudest events are gunfire and impacts, and a cap that
+      // dropped those would silence exactly the sounds the player most needs; what it sheds is quieter,
+      // later duplicates of a sound already playing.
+      return false;
     }
-    const stolen = this.next;
-    this.next = (this.next + 1) % this.sources.length;
-    const source = this.sources[stolen]!;
-    // Reconnecting is required because the previous playback left a gain attached.
-    source.disconnect();
-    const gain = source.context.createGain();
-    return { source, gain };
+
+    // A fresh node every time, which is the only form the spec permits.
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+
+    const gain = context.createGain();
+    gain.gain.value = level;
+    source.connect(gain);
+    gain.connect(destination);
+
+    this.live += 1;
+    if (this.live > this.peak) {
+      this.peak = this.live;
+    }
+
+    // The single cleanup point. Disconnecting here rather than relying on GC is what stops a long firefight
+    // accumulating live nodes — the failure the old pool was meant to prevent, now prevented for real.
+    source.onended = () => {
+      this.live -= 1;
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // A node may already be disconnected if the graph was torn down mid-playback. Teardown must not throw.
+      }
+    };
+
+    source.start(context.currentTime + delaySeconds);
+    return true;
+  }
+
+  /** One-shots currently sounding. */
+  get activeCount(): number {
+    return this.live;
+  }
+
+  /** The high-water mark of {@link activeCount} since the context was built. */
+  get peakCount(): number {
+    return this.peak;
   }
 }
 
@@ -334,7 +419,7 @@ export class CombatAudio {
   private turretLoop: LoopVoice | null = null;
 
   /** The pooled one-shot sources. Null before `unlock()`. */
-  private voices: VoicePool | null = null;
+  private voices: OneShotVoices | null = null;
   /** Mute state, applied on top of the volume rather than instead of it. */
   private muted = false;
   /** Player-facing volume, 0..1, multiplied into the tuned master gain. */
@@ -385,9 +470,9 @@ export class CombatAudio {
       this.spatialBus = this.context.createGain();
       this.spatialBus.connect(this.bus);
 
-      // Eight voices. Enough that a shot plus two impacts plus a destruction never steal from each other,
-      // few enough that the graph stays trivial.
-      this.voices = new VoicePool(this.context, 8);
+      // The voice ceiling is `OneShotVoices.MAX_CONCURRENT`. Enough that a shot plus two impacts plus a
+      // destruction never cut each other off, few enough that a firefight cannot stack into a wall of sound.
+      this.voices = new OneShotVoices();
     }
 
     void this.context.resume();
@@ -465,21 +550,43 @@ export class CombatAudio {
       (b): b is AudioBuffer => b !== undefined,
     );
     if (engineBuffers.length > 0) {
-      // Equal base gains: the per-frame weights decide the balance, so a vehicle missing a layer is not
-      // permanently quieter than one that has all three.
-      const weights = engineBuffers.map(() => 1);
+      /**
+       * Equal base gains, multiplied by the class-level level.
+       *
+       * The `engineGain` factor is load-bearing and was previously missing entirely. The three engine layers
+       * are cross-faded to *sum* to 1, so without it the engine bed ran at unity — 0.92 measured at idle —
+       * instead of the authored 0.3. Combined with a track loop and a turret servo at similar unity levels,
+       * the continuous bed alone reached an RMS around 0.19 and a crest factor near 2.6, which is the
+       * broadband, near-constant-amplitude signature of the "broken television" the owner heard.
+       *
+       * The per-frame weights still decide the *balance* between layers, so a vehicle missing one is not
+       * permanently quieter than one with all three.
+       */
+      const weights = engineBuffers.map(() => AUDIO_TUNING.engineGain);
       this.playerEngine = new LoopVoice(context, bus, engineBuffers, weights);
       this.playerEngine.start();
-      this.opponentEngine = new LoopVoice(context, bus, engineBuffers, engineBuffers.map(() => 0));
+      // The opponent's engine is a background presence, and is additionally scaled per-frame by the
+      // opponent's own load, so it stays audible when it is working and fades when it is not.
+      this.opponentEngine = new LoopVoice(
+        context,
+        bus,
+        engineBuffers,
+        engineBuffers.map(() => AUDIO_TUNING.engineGain * AUDIO_TUNING.opponentEngineScale),
+      );
       this.opponentEngine.start();
     }
 
     if (this.sounds.tracks !== undefined) {
-      this.trackLoop = new LoopVoice(context, bus, [this.sounds.tracks], [1]);
+      this.trackLoop = new LoopVoice(context, bus, [this.sounds.tracks], [AUDIO_TUNING.trackGain]);
       this.trackLoop.start();
     }
     if (this.sounds.turret !== undefined) {
-      this.turretLoop = new LoopVoice(context, bus, [this.sounds.turret], [1]);
+      /**
+       * The turret servo is the loudest loop in the game at its raw level (RMS 0.378 measured offline, the
+       * highest of the set) and it plays *continuously* while traversing, so it needs the full authored
+       * reduction rather than a token one. At unity it dominated the mix on its own.
+       */
+      this.turretLoop = new LoopVoice(context, bus, [this.sounds.turret], [AUDIO_TUNING.turretGain]);
       this.turretLoop.start();
     }
   }
@@ -563,7 +670,7 @@ export class CombatAudio {
   }
 
   /**
-   * Plays one buffer through a pooled voice.
+   * Plays one buffer as a one-shot.
    *
    * @param panning when supplied, the sound is placed in stereo and attenuated; otherwise it plays centred
    *   and unattenuated, which is right for the player's own vehicle
@@ -574,8 +681,8 @@ export class CombatAudio {
     options: { panning?: { pan: number; gain: number }; delaySeconds?: number } = {},
   ): void {
     const context = this.context;
-    const pool = this.voices;
-    if (buffer === undefined || context === null || pool === null || this.muted) {
+    const voices = this.voices;
+    if (buffer === undefined || context === null || voices === null || this.muted) {
       return;
     }
 
@@ -586,30 +693,16 @@ export class CombatAudio {
       return;
     }
 
-    const { source, gain: gainNode } = pool.claim();
-    source.buffer = buffer;
-    gainNode.gain.value = level;
-
     if (panning !== undefined) {
+      // A panner per spatialised sound, created with it and left to be collected with it. It is a few dozen
+      // bytes over a buffer that is already resident, and it keeps the one-shot path free of shared state.
       const panner = context.createStereoPanner();
       panner.pan.value = panning.pan;
-      source.connect(gainNode);
-      gainNode.connect(panner);
       panner.connect(this.spatialBus ?? this.bus!);
+      voices.play(context, buffer, level, panner, options.delaySeconds ?? 0);
     } else {
-      source.connect(gainNode);
-      gainNode.connect(this.bus!);
+      voices.play(context, buffer, level, this.bus!, options.delaySeconds ?? 0);
     }
-
-    source.onended = () => {
-      try {
-        source.disconnect();
-        gainNode.disconnect();
-      } catch {
-        // A node can already be disconnected if the graph was torn down. Teardown must not throw.
-      }
-    };
-    source.start(context.currentTime + (options.delaySeconds ?? 0));
   }
 
   /**
@@ -776,6 +869,26 @@ export class CombatAudio {
   /** True once the context exists and the assets have loaded. */
   get isRunning(): boolean {
     return this.context !== null && this.ready;
+  }
+
+  /**
+   * One-shots currently sounding.
+   *
+   * Exposed for the runtime gate, which asserts this stays bounded — the V7 failure it replaces presented as
+   * sources accumulating without limit and eventually throwing, and a plain count catches both.
+   */
+  get activeVoiceCount(): number {
+    return this.voices?.activeCount ?? 0;
+  }
+
+  /** The highest {@link activeVoiceCount} reached. Saturating at the ceiling means the cap is binding. */
+  get peakVoiceCount(): number {
+    return this.voices?.peakCount ?? 0;
+  }
+
+  /** The simultaneous-voice ceiling, so a test can assert `active <= ceiling` without hard-coding 8. */
+  get voiceCeiling(): number {
+    return OneShotVoices.MAX_CONCURRENT;
   }
 
   /** Muted state. Preserved from V4, where `M` toggled it. */

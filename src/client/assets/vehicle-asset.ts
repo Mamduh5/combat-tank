@@ -155,6 +155,26 @@ async function loadUncached(scene: Scene, relativePath: string, definition: Vehi
   const container = await LoadAssetContainerAsync(url, scene);
 
   /**
+   * Hands the loaded nodes to the scene. Without this the model exists and is never drawn.
+   *
+   * `LoadAssetContainerAsync` parses and *constructs* everything — meshes, materials, the node hierarchy —
+   * but deliberately does **not** register it with the scene. The loader's contract is that the caller
+   * decides when and where the assets go, so that a model can be loaded once and instanced in several
+   * places, or held off-screen until it is needed.
+   *
+   * Forgetting the call is silent and total. Every node reports sane world positions, valid materials, and
+   * correct bounds; `isEnabled()` and `isVisible()` are both true; the frustum test passes; the material
+   * compiles. None of that matters, because Babylon's `_evaluateActiveMeshes` iterates `scene.meshes`, and a
+   * container's meshes are not in that list. They are built, measured, posed, and skipped every single frame.
+   *
+   * This is why V7 reported a fully working tank — 36 meshes, every asset contract satisfied, the scale
+   * normalisation note confirming a correct 6.70 m hull against a 6.7 m definition — while the player saw no
+   * tank at all. Every assertion the gates made was true, and none of them asked the only question that
+   * mattered: *is it in the scene?*
+   */
+  container.addAllToScene();
+
+  /**
    * Every node in the container, whatever list Babylon filed it under.
    *
    * This is not tidiness, it is a bug that was caught in the browser and could not be caught by any type

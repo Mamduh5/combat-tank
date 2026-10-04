@@ -28,7 +28,10 @@
     "shots": "node tools/shots.mjs",
     "controls": "node tools/control-check.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test",
-    "verify:browser": "npm run build && npm run assets:audit"
+    "verify:browser": "npm run build && npm run assets:audit",
+    "runtime": "npm run build && node tools/runtime-check.mjs shots/runtime",
+    "runtime:quick": "npm run build && node tools/runtime-check.mjs shots/runtime-quick --runtime-ms=15000",
+    "audio:analyse": "node tools/audio-analysis.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.29.0",

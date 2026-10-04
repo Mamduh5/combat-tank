@@ -80,18 +80,46 @@ export const TEXTURE_SETS = {
   iron: 'corrugated-iron',
   stone: 'stone',
   rubber: 'rubber',
+  /** Tree bark reuses the timber set rather than shipping a near-identical fourth wood texture. */
+  bark: 'timber',
 } as const;
 
-/** The three files that make up one texture set. */
+/** The short names a `MaterialSpec.textureSet` may use. Typed so an unknown one is a compile error. */
+export type TextureSetName = keyof typeof TEXTURE_SETS;
+
+/**
+ * The three files that make up one texture set.
+ *
+ * ## Why the set name is resolved here, and not at the call site
+ *
+ * `TEXTURE_SETS` maps the *semantic* name a material refers to (`ground`, `rail`, `iron`) onto the *file*
+ * name the generator wrote (`ground-detail`, `rail-steel`, `corrugated-iron`). Two names, not one, is
+ * deliberate: a surface is "the ground" whether its texture is a detailed ground or a flat colour, and
+ * renaming an asset should not require editing every material spec that used it.
+ *
+ * V7 shipped this map and then never applied it. `textureUrls` interpolated whatever it was given straight
+ * into the path, so `'ground'` requested `textures/ground-albedo.png` while the file on disk was
+ * `textures/ground-detail-albedo.png`. Every ground, road, rail, iron, and steel surface in the game therefore
+ * 404'd, and Babylon substituted its magenta missing-texture placeholder — which, tiled across the terrain,
+ * is exactly the checkerboard the owner reported. An unknown set name now throws rather than silently
+ * requesting a file that does not exist.
+ */
 export function textureUrls(setName: string): {
   albedo: string;
   normal: string;
   metallicRoughness: string;
 } {
+  const file = (TEXTURE_SETS as Record<string, string | undefined>)[setName];
+  if (file === undefined) {
+    throw new Error(
+      `Combat Tank: unknown texture set '${setName}'. Known sets: ${Object.keys(TEXTURE_SETS).join(', ')}. ` +
+        `Add it to TEXTURE_SETS in asset-manifest.ts rather than passing a file name straight through.`,
+    );
+  }
   return {
-    albedo: assetUrl(`textures/${setName}-albedo.png`),
-    normal: assetUrl(`textures/${setName}-normal.png`),
-    metallicRoughness: assetUrl(`textures/${setName}-mr.png`),
+    albedo: assetUrl(`textures/${file}-albedo.png`),
+    normal: assetUrl(`textures/${file}-normal.png`),
+    metallicRoughness: assetUrl(`textures/${file}-mr.png`),
   };
 }
 

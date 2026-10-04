@@ -185,6 +185,17 @@ export default tseslint.config(
       // Driven by `tools/control-check.mjs`. Same contract: evaluated inside the running game, so it needs
       // the browser globals and reaches the live object graph through `globalThis.__combatTank`.
       'tools/control-probe.js',
+      // The permanent end-to-end gate, driven by `tools/runtime-check.mjs`. Same contract as the above.
+      'tools/runtime-probe.js',
+      // One-off diagnostics written during the V7 recovery, kept because they are cited as the evidence for a
+      // fix rather than for a claim. `webaudio-semantics-probe.js` establishes Web Audio's buffer-assignment
+      // semantics directly — the audio fix depends on them and the platform does not document them to the point
+      // where they can be assumed. `audio-analysis.mjs` measures the shipped WAVs, which is what established
+      // that the "corrupted audio" was a gain-staging fault and not damaged files.
+      //
+      // What changed is that their findings are now asserted permanently: the voice ceiling and drain are
+      // checked every run in `runtime-probe.js`, so these are corroboration rather than the only safeguard.
+      'tools/webaudio-semantics-probe.js',
     ],
     languageOptions: {
       ecmaVersion: 2022,

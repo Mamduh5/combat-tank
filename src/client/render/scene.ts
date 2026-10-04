@@ -4,6 +4,8 @@ import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight.js';
 import { Scene } from '@babylonjs/core/scene.js';
 import { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js';
+import { RawCubeTexture } from '@babylonjs/core/Materials/Textures/rawCubeTexture.js';
+import { Constants } from '@babylonjs/core/Engines/constants.js';
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js';
@@ -79,6 +81,16 @@ export const SCENE_TUNING = {
    * furniture rather than as terrain features, and stay legible against green ground at distance.
    */
   rangeMarkerColor: new Color3(0.86, 0.44, 0.16),
+
+  /**
+   * How strongly the image-based lighting contributes overall.
+   *
+   * Deliberately below 1. The procedural environment is a broad sky gradient with no sun disc, so the
+   * directional light is the scene's real key. Letting the IBL come in at full strength would wash the
+   * terrain's banded vertex colours toward flat blue-grey and undo the large-scale structure the V6
+   * terrain ramp exists to provide.
+   */
+  environmentIntensity: 0.85,
 } as const;
 
 /** Grid resolution of the rendered terrain mesh. Finer than the collision heightfield. */
@@ -123,6 +135,8 @@ export function createScene(engine: Engine, terrain: Terrain): SceneBundle {
 
   // Built after the camera, because the dome tracks the camera's position each frame.
   applySkyGradient(scene, camera);
+  // Before any PBR material is created, so every one of them picks the environment up on construction.
+  applyEnvironmentLighting(scene);
 
   // A directional sun for shape, and a hemispheric fill so the underside of the hull is not black.
   const sun = new DirectionalLight('sun', SCENE_TUNING.sunDirection, scene);
@@ -216,6 +230,78 @@ function applySkyGradient(scene: Scene, camera: UniversalCamera): void {
  * than the play area so it reads as being beyond everything the player can reach.
  */
 const SKY_DOME_DIAMETER_M = 1600;
+
+/**
+ * Builds the scene's image-based lighting, procedurally.
+ *
+ * ## Why a PBR scene with no environment renders black
+ *
+ * A `PBRMaterial` is not lit by the directional and hemispheric lights alone. Diffuse comes from those, but
+ * *specular* — everything a metal is made of — comes from the environment texture: a metal has no colour of its
+ * own, it is entirely a mirror, and a mirror with nothing to mirror is black. Steel tracks, a rail crown, and
+ * the tank's own metal parts all depend on this.
+ *
+ * V7 introduced PBR materials and never set `scene.environmentTexture`. The result was a tank that loaded
+ * correctly, passed every readiness check, and rendered as an unlit black silhouette against correct
+ * terrain — "visible" in every sense a scene-graph assertion can measure, and still not one the player could
+ * recognise.
+ *
+ * ## Why it is generated rather than shipped
+ *
+ * The conventional solution is a downloaded `.env` or `.hdr` probe. That would break the provenance rule this
+ * project works under (`docs/asset-provenance.md`: nothing is downloaded and nothing is licensed) and would
+ * add a multi-megabyte binary for an effect a small procedural sky reproduces closely enough.
+ *
+ * So the IBL is rendered in code from the *same* colours as the visible sky dome, so reflections agree with
+ * the horizon the player can actually see. Low-resolution faces (32 px) with mip-mapped roughness levels is
+ * all a soft outdoor reflection needs: a sharp probe buys nothing here and costs memory.
+ */
+function applyEnvironmentLighting(scene: Scene): void {
+  const faceSize = 32;
+  const faces: ArrayBufferView[] = [];
+  const zenith = SCENE_TUNING.skyZenith;
+  const horizon = SCENE_TUNING.skyHorizon;
+
+  // Face order is Babylon's: +X, -X, +Y, -Y, +Z, -Z. Each face gets the same vertical gradient the sky dome
+  // uses, so a reflective surface picks up the same pale-horizon-over-blue banding.
+  for (let face = 0; face < 6; face += 1) {
+    const data = new Uint8Array(faceSize * faceSize * 4);
+    for (let y = 0; y < faceSize; y += 1) {
+      // v runs top-to-bottom on the texture, mapping to the top of the face (skyward) first.
+      const t = 1 - y / (faceSize - 1);
+      // `pow` matches the dome's blend curve, so the two agree at the horizon line.
+      const blend = Math.pow(t, 0.45);
+      const r = (horizon.r + (zenith.r - horizon.r) * blend) * 255;
+      const g = (horizon.g + (zenith.g - horizon.g) * blend) * 255;
+      const b = (horizon.b + (zenith.b - horizon.b) * blend) * 255;
+      for (let x = 0; x < faceSize; x += 1) {
+        const i = (y * faceSize + x) * 4;
+        data[i] = Math.round(r);
+        data[i + 1] = Math.round(g);
+        data[i + 2] = Math.round(b);
+        data[i + 3] = 255;
+      }
+    }
+    faces.push(data);
+  }
+
+  const texture = new RawCubeTexture(
+    scene,
+    faces,
+    faceSize,
+    Constants.TEXTUREFORMAT_RGBA,
+    Constants.TEXTURETYPE_UNSIGNED_BYTE,
+    // Mip-mapped, because the roughness levels sample progressively smaller mips. Without them a rough
+    // surface samples the same sharp sky and reads as polished.
+    true,
+    false,
+    Constants.TEXTURE_TRILINEAR_SAMPLINGMODE,
+  );
+  texture.name = 'procedural-environment';
+  texture.gammaSpace = true;
+  scene.environmentTexture = texture;
+  scene.environmentIntensity = SCENE_TUNING.environmentIntensity;
+}
 
 /**
  * Builds the visible terrain surface.

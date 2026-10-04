@@ -72,7 +72,7 @@ interface GltfBufferView {
 
 interface GltfDocument {
   nodes: GltfNode[];
-  meshes: { primitives: { attributes: { POSITION: number } }[] }[];
+  meshes: { primitives: { attributes: { POSITION: number; NORMAL?: number } }[] }[];
   accessors: GltfAccessor[];
   bufferViews: GltfBufferView[];
 }
@@ -109,6 +109,12 @@ const tankModel = (await loadTool('../../tools/lib/tank-model.mjs')) as TankMode
 const gltfLib = (await loadTool('../../tools/lib/gltf.mjs')) as GltfBuilderModule;
 const wavLib = (await loadTool('../../tools/lib/wav.mjs')) as WavModule;
 
+/** The runtime asset manifest, which is the module that decides which texture file each surface requests. */
+const manifestModule = (await loadTool('../../src/client/assets/asset-manifest.js')) as {
+  TEXTURE_SETS: Record<string, string>;
+  textureUrls(setName: string): { albedo: string; normal: string; metallicRoughness: string };
+};
+
 const { buildTankModel, TANK_SPECS } = tankModel;
 const { GltfBuilder, quaternionY } = gltfLib;
 const { encodeWav } = wavLib;
@@ -123,6 +129,56 @@ interface AssetManifest {
 
 const ASSET_DIR = join(process.cwd(), 'public', 'assets');
 const VARIANTS = Object.keys(TANK_SPECS);
+
+describe('the texture manifest', () => {
+  /**
+   * The regression that turned the battlefield into a checkerboard.
+   *
+   * `asset-manifest.ts` declares `TEXTURE_SETS`, mapping the *semantic* name a material uses onto the *file*
+   * name the generator wrote — `ground` to `ground-detail`, `rail` to `rail-steel`, `iron` to
+   * `corrugated-iron`, `road` to `road-surface`, `steel` to `painted-steel`. That map shipped, and then was
+   * never applied: `textureUrls` interpolated whatever it was given straight into the path, so `'ground'`
+   * requested `textures/ground-albedo.png` while the file on disk was `textures/ground-detail-albedo.png`.
+   *
+   * Eight of thirteen surfaces therefore 404'd, and Babylon substituted its magenta missing-texture
+   * placeholder — which, tiled across the terrain, is exactly the checkerboard the owner reported.
+   *
+   * This is a good illustration of why *asset-load* assertions are not enough: every gate confirmed the files
+   * existed on disk, which was true. Nobody checked that the URL the scene requested was the one the file was
+   * published under.
+   */
+  it('resolves every semantic texture-set name to a file that exists', () => {
+    for (const setName of Object.keys(manifestModule.TEXTURE_SETS)) {
+      const urls = manifestModule.textureUrls(setName);
+      for (const [kind, url] of Object.entries(urls)) {
+        // The manifest returns site-root-relative URLs; resolve them against `public/`, which is what Vite
+        // copies verbatim into `dist/`.
+        const relative = url.replace(/^\//, '');
+        const onDisk = join(process.cwd(), 'public', relative);
+        expect(existsSync(onDisk), `${setName} ${kind}: ${relative} does not exist`).toBe(true);
+      }
+    }
+  });
+
+  it('rejects an unknown texture-set name rather than silently requesting a missing file', () => {
+    // The behaviour change that makes the whole class of mistake loud. Before, an unmapped name produced a
+    // 404 that nothing reported; now it throws at material construction.
+    expect(() => manifestModule.textureUrls('no-such-surface')).toThrow(/unknown texture set/i);
+  });
+
+  it('publishes every texture file the manifest maps to', () => {
+    // The other half of the same bug, from the filesystem side: a generated set must not be silently renamed
+    // without updating the manifest. Both directions matter, and this catches the generator drifting.
+    const published = new Set(
+      readdirSync(join(ASSET_DIR, 'textures'))
+        .filter((f) => f.endsWith('-albedo.png'))
+        .map((f) => f.replace(/-albedo\.png$/, '')),
+    );
+    for (const file of Object.values(manifestModule.TEXTURE_SETS)) {
+      expect(published.has(file), `${file}-albedo.png is mapped but not published`).toBe(true);
+    }
+  });
+});
 
 /** Reads a generated model and returns its glTF JSON chunk. */
 function readGltfJson(file: string): GltfDocument {
@@ -365,6 +421,63 @@ describe('the glTF builder', () => {
       expect(buffer.readUInt32LE(0), `${file} magic`).toBe(0x46546c67);
       expect(buffer.readUInt32LE(4), `${file} version`).toBe(2);
       expect(buffer.readUInt32LE(8), `${file} declared length`).toBe(buffer.byteLength);
+    }
+  });
+
+  it('writes finite, unit-length normals into every shipped model', () => {
+    /**
+     * The regression that made the tank render as a black silhouette.
+     *
+     * `MeshBuilder.normalize3` returned a plain array while its one call site read `.x/.y/.z` off the result.
+     * On an array those are `undefined`, so `undefined` went into the normal buffer and **every normal in every
+     * `.glb` was NaN**. A NaN normal propagates through the lighting shader, so every fragment failed its
+     * `N·L` test and shaded to black.
+     *
+     * Nothing else caught it. The type checker was clean — `undefined * number` is legal JavaScript. The
+     * asset audit reported every mesh as textured, PBR, and ready. The loader reported a correct hull
+     * measurement. The model *was* in the scene and *was* drawn. It was simply black, because the only thing
+     * that decides a surface's lit colour is its normals and all of them were NaN.
+     *
+     * So this reads the generated floats rather than the code that wrote them, which is the only place the
+     * defect is actually observable.
+     */
+    for (const file of ['models/ct-medium.glb', 'models/ct-heavy.glb', 'models/props.glb']) {
+      const buffer = readFileSync(join(ASSET_DIR, file));
+      const jsonLength = buffer.readUInt32LE(12);
+      const json = JSON.parse(buffer.toString('utf8', 20, 20 + jsonLength)) as GltfDocument;
+      const binStart = 20 + jsonLength + 8;
+      const bad: string[] = [];
+
+      json.meshes.forEach((mesh, meshIndex) => {
+        const normalIndex = mesh.primitives[0].attributes.NORMAL;
+        // A mesh with no NORMAL attribute is a different (also undesirable) defect; this test is about values.
+        if (normalIndex === undefined) {
+          bad.push(`mesh ${meshIndex} has no NORMAL attribute`);
+          return;
+        }
+        const accessor = json.accessors[normalIndex]!;
+        const view = json.bufferViews[accessor.bufferView]!;
+        const offset = binStart + (view.byteOffset ?? 0);
+        for (let i = 0; i < accessor.count; i += 1) {
+          const at = offset + i * 12;
+          const x = buffer.readFloatLE(at);
+          const y = buffer.readFloatLE(at + 4);
+          const z = buffer.readFloatLE(at + 8);
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            bad.push(`mesh ${meshIndex} normal ${i} is not finite`);
+            break;
+          }
+          // A zero-length normal cannot be normalised by the shader and shades as black too, so it is the
+          // same class of failure as NaN and worth catching here rather than in a screenshot.
+          const length = Math.hypot(x, y, z);
+          if (Math.abs(length - 1) > 1e-3) {
+            bad.push(`mesh ${meshIndex} normal ${i} has length ${length.toFixed(4)}`);
+            break;
+          }
+        }
+      });
+
+      expect(bad, `${file} normals: ${bad.join('; ')}`).toEqual([]);
     }
   });
 });
