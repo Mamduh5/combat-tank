@@ -9,6 +9,7 @@ import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
+import { makeSurfaceMaterial } from '../assets/materials.js';
 import { Material } from '@babylonjs/core/Materials/material.js';
 import type { Engine } from '@babylonjs/core/Engines/engine.js';
 import type { Terrain } from '../../core/world/terrain.js';
@@ -247,14 +248,34 @@ function buildTerrainMesh(scene: Scene, terrain: Terrain): Mesh {
   const vertexData = new VertexData();
   vertexData.positions = grid.positions as unknown as number[];
   vertexData.indices = grid.indices as unknown as number[];
+  // The V6 height-band ramp is **kept as vertex colour**. It does something a texture cannot: it makes the
+  // landscape's structure readable at a glance, so a ridge looks high and a valley floor looks low from the
+  // air. That is why the bands are piecewise rather than a smooth gradient, and why replacing them with a
+  // tiled ground texture would be a regression.
+  //
+  // What V7 adds is the texture *underneath* it. PBR multiplies albedo texture by vertex colour, so the
+  // ground keeps its banded large-scale colour while gaining the material read a flat ramp cannot: mud
+  // patches, grass grain, and a normal map that catches the sun on every small rise.
   vertexData.colors = colors as unknown as number[];
+  // UVs in world metres, so the ground texture tiles at a constant physical scale regardless of how coarse
+  // the render grid is. Deriving UVs from grid indices instead would make the texture stretch or shrink
+  // whenever `TERRAIN_RENDER_CELLS` changed.
+  vertexData.uvs = terrainUvs(grid.positions) as unknown as number[];
   vertexData.normals = computeVertexNormals(grid.positions, grid.indices) as unknown as number[];
   vertexData.applyToMesh(mesh, false);
 
-  const material = new StandardMaterial('terrain-mat', scene);
-  material.diffuseColor = Color3.White();
-  // No specular: a shiny untextured plane reads as plastic and makes slopes harder to judge.
-  material.specularColor = Color3.Black();
+  const material = makeSurfaceMaterial(scene, 'terrain-mat', {
+    textureSet: 'ground',
+    // Six metres per tile: coarse enough that the pattern reads as *terrain* rather than as wallpaper, fine
+    // enough that a player stopped beside a hedge can see grass and bare earth.
+    tileSizeM: 6,
+    metallic: 0,
+    roughness: 1,
+    normalStrength: 0.8,
+  });
+  // Roughness and metallic are left to the map; only the normal's strength is reduced, because a full-strength
+  // normal on a low-poly terrain grid produces shading noise along the triangle edges.
+  material.bumpTexture!.level = 0.5;
 
   // Present the ground's upward-facing triangles to the renderer as front faces.
   //
@@ -330,6 +351,30 @@ function buildRangeMarkers(scene: Scene, terrain: Terrain): Mesh[] {
 
   return meshes;
 }
+
+/**
+ * World-space UVs for the terrain, in metres.
+ *
+ * Deliberately *not* derived from grid indices. The terrain is rendered on a fixed cell grid, so index-based
+ * UVs would tie the texture's apparent size to `TERRAIN_RENDER_CELLS`: change the render resolution and the
+ * ground texture would silently stretch or shrink, which is the kind of change that looks like a bug in the
+ * art rather than in the code. World-space UVs keep the texel density constant no matter how the grid is
+ * subdivided.
+ *
+ * Divided by the same number as the material's `tileSizeM`, because the texture itself wraps once per unit.
+ */
+function terrainUvs(positions: Float32Array): number[] {
+  const uvs = new Array<number>(positions.length / 3 * 2);
+  for (let i = 0, j = 0; i < positions.length; i += 3) {
+    uvs[j] = (positions[i] ?? 0) / TERRAIN_UV_SCALE_M;
+    uvs[j + 1] = (positions[i + 2] ?? 0) / TERRAIN_UV_SCALE_M;
+    j += 2;
+  }
+  return uvs;
+}
+
+/** World metres per UV unit on the terrain. Must match the terrain material's `tileSizeM`. */
+const TERRAIN_UV_SCALE_M = 6;
 
 /**
  * Colour for a normalised terrain height, across several distinct bands.

@@ -2,11 +2,12 @@ import {
   Color3,
   Mesh,
   MeshBuilder,
-  StandardMaterial,
+  type PBRMaterial,
   TransformNode,
   VertexData,
   type Scene,
 } from '@babylonjs/core';
+import { makeSurfaceMaterial, type MaterialSpec } from '../assets/materials.js';
 import type { Battlefield } from '../../core/world/battlefield.js';
 import type { LevelCorridor } from '../../core/world/terrain.js';
 import type { PlacedStructure, StructureKind } from '../../core/world/structures.js';
@@ -245,22 +246,48 @@ function seedFrom(text: string): number {
   }
   return h >>> 0;
 }
-
 /**
- * A rough, non-shiny material. Reused per colour so the scene does not accumulate hundreds of them.
+ * A textured surface material for the scenery.
  *
- * The **emissive lift** is the notable part. The sun is a single directional light at a steep angle, so
- * every wall turned away from it gets only the hemispheric ambient and renders almost black â€” a village of
- * solid silhouettes. A small self-lit floor keeps the shadow side readable as *material* without washing
- * out the lit side, which is the standard trick for readable prototype art and costs nothing.
+ * ## What changed in V7, and why
+ *
+ * V6 built every surface as a flat `StandardMaterial` with a barely-there specular and an emissive lift.
+ * The emissive lift was a real and successful decision and the owner approved the result, so the
+ * reasoning still holds: with a single directional light, any face turned away from the sun receives only
+ * ambient and renders as a solid silhouette, which is what made V6's village read as dark blobs.
+ *
+ * So the **emissive lift is kept**, and the PBR path adds what a flat colour could not: a texture, a
+ * normal map, and a real metallic/roughness response. A brick wall is now visibly coursed rather than
+ * uniformly salmon; ballast is visibly crushed stone rather than a grey ribbon.
+ *
+ * ## Why `makeSurfaceMaterial` and not direct PBR construction
+ *
+ * The texture sets live in one library (`assets/materials.ts`) so the whole battlefield shares a coherent
+ * set of materials. Constructing PBR materials inline here would spread shading decisions across two files
+ * and make "is the ballast using the ballast texture?" a question that needs reading rather than looking up.
+ *
+ * @param colour the V6-approved palette hue, used as the tint over the texture
+ * @param textureSet which shared texture to apply, or null for a plain painted surface
+ * @param tileSizeM world-space size of one texture tile, in metres
  */
-function makeMaterial(scene: Scene, name: string, colour: Color3): StandardMaterial {
-  const material = new StandardMaterial(name, scene);
-  material.diffuseColor = colour;
-  // Prototype scenery should read by silhouette and colour, not by a specular highlight.
-  material.specularColor = new Color3(0.05, 0.05, 0.05);
-  // About a quarter of the albedo, so a fully shadowed face keeps roughly a quarter of its colour.
-  material.emissiveColor = colour.scale(0.25);
+function makeMaterial(
+  scene: Scene,
+  name: string,
+  colour: Color3,
+  textureSet: string | null = null,
+  tileSizeM = 2,
+  extra: Partial<MaterialSpec> = {},
+): PBRMaterial {
+  const spec: MaterialSpec = {
+    tint: colour,
+    tileSizeM,
+    ...(textureSet !== null ? { textureSet } : {}),
+    ...extra,
+  };
+  const material = makeSurfaceMaterial(scene, name, spec);
+  // The emissive lift, preserved from V6 and for the same reason, so a shadowed face keeps roughly
+  // three-quarters of its colour rather than reading as a silhouette.
+  material.emissiveColor = colour.scale(0.22);
   return material;
 }
 
@@ -295,7 +322,7 @@ function buildRock(
   scene: Scene,
   root: TransformNode,
   placed: PlacedStructure,
-  material: StandardMaterial,
+  material: PBRMaterial,
 ): void {
   const s = placed.structure;
   const seed = seedFrom(s.id);
@@ -336,8 +363,8 @@ function buildBuilding(
   scene: Scene,
   root: TransformNode,
   placed: PlacedStructure,
-  material: StandardMaterial,
-  roofMaterial: StandardMaterial,
+  material: PBRMaterial,
+  roofMaterial: PBRMaterial,
 ): void {
   const s = placed.structure;
   const bodyHeight = s.heightM * 0.72;
@@ -374,7 +401,7 @@ function buildBarrier(
   scene: Scene,
   root: TransformNode,
   placed: PlacedStructure,
-  material: StandardMaterial,
+  material: PBRMaterial,
 ): void {
   const s = placed.structure;
   const slab = MeshBuilder.CreateBox(
@@ -396,8 +423,8 @@ function buildTree(
   z: number,
   groundY: number,
   scale: number,
-  foliage: StandardMaterial,
-  trunk: StandardMaterial,
+  foliage: PBRMaterial,
+  trunk: PBRMaterial,
 ): void {
   const trunkMesh = MeshBuilder.CreateCylinder(
     `${name}-trunk`,
@@ -429,7 +456,7 @@ function buildBush(
   z: number,
   groundY: number,
   scale: number,
-  foliage: StandardMaterial,
+  foliage: PBRMaterial,
 ): void {
   const bush = MeshBuilder.CreateSphere(
     name,
@@ -536,7 +563,7 @@ function buildRibbon(
   samples: readonly CorridorSample[],
   halfWidthM: number,
   heightAboveGroundM: number,
-  material: StandardMaterial,
+  material: PBRMaterial,
   parent: TransformNode,
   heightAt: (x: number, z: number) => number,
 ): Mesh | null {
@@ -615,11 +642,11 @@ function buildRailway(
   samples: readonly CorridorSample[],
   heightAt: (x: number, z: number) => number,
   materials: {
-    ballast: StandardMaterial;
-    cess: StandardMaterial;
-    sleeper: StandardMaterial;
-    rail: StandardMaterial;
-    pole: StandardMaterial;
+    ballast: PBRMaterial;
+    cess: PBRMaterial;
+    sleeper: PBRMaterial;
+    rail: PBRMaterial;
+    pole: PBRMaterial;
   },
 ): Mesh[] {
   const meshes: Mesh[] = [];
@@ -758,7 +785,7 @@ function buildTelegraphPoles(
   root: TransformNode,
   samples: readonly CorridorSample[],
   heightAt: (x: number, z: number) => number,
-  material: StandardMaterial,
+  material: PBRMaterial,
 ): Mesh | null {
   const parts: Mesh[] = [];
 
@@ -844,7 +871,7 @@ function buildRoad(
   root: TransformNode,
   samples: readonly CorridorSample[],
   widthM: number,
-  material: StandardMaterial,
+  material: PBRMaterial,
   heightAt: (x: number, z: number) => number,
 ): Mesh | null {
   return buildRibbon(scene, `road-${samples.length}`, samples, widthM * 0.5, 0.16, material, root, heightAt);
@@ -871,7 +898,7 @@ function buildLevelCrossing(
   crossing: { x: number; z: number },
   railwayDir: { x: number; z: number },
   heightAt: (x: number, z: number) => number,
-  materials: { deck: StandardMaterial; post: StandardMaterial },
+  materials: { deck: PBRMaterial; post: PBRMaterial },
 ): number {
   const groundY = heightAt(crossing.x, crossing.z);
   let meshCount = 0;
@@ -940,7 +967,7 @@ function buildStationPlatform(
   toIndex: number,
   side: 1 | -1,
   heightAt: (x: number, z: number) => number,
-  material: StandardMaterial,
+  material: PBRMaterial,
 ): void {
   const segment = samples.slice(fromIndex, toIndex);
   if (segment.length < 2) {
@@ -1001,15 +1028,19 @@ export function buildBattlefieldProps(scene: Scene, battlefield: Battlefield): B
   const root = new TransformNode('battlefield-props', scene);
   let meshCount = 0;
 
-  const roofMaterial = makeMaterial(scene, 'prop-roof', PALETTE.roof);
-  const heavyFoliage = makeMaterial(scene, 'prop-foliage-heavy', PALETTE.foliageHeavy);
-  const lightFoliage = makeMaterial(scene, 'prop-foliage-light', PALETTE.foliageLight);
-  const trunkMaterial = makeMaterial(scene, 'prop-trunk', PALETTE.trunk);
+  // Roofs are corrugated iron: the one structural surface on the map that is genuinely metallic, which
+  // is what makes a barn roof catch the sun differently from its brick walls.
+  const roofMaterial = makeMaterial(scene, 'prop-roof', PALETTE.roof, 'iron', 1.8);
+  // Foliage is a clumped leaf texture at a coarse tile, so a canopy reads as masses of leaves with
+  // shadow between them rather than as one flat green blob.
+  const heavyFoliage = makeMaterial(scene, 'prop-foliage-heavy', PALETTE.foliageHeavy, 'foliage', 3);
+  const lightFoliage = makeMaterial(scene, 'prop-foliage-light', PALETTE.foliageLight, 'foliage', 3);
+  const trunkMaterial = makeMaterial(scene, 'prop-trunk', PALETTE.trunk, 'bark', 1.6);
 
   // Materials are keyed by colour so a map with forty structures of the same kind still creates one
   // material rather than forty. A scene accumulates materials for the life of the page otherwise.
-  const materialCache = new Map<string, StandardMaterial>();
-  const materialFor = (placed: PlacedStructure): StandardMaterial => {
+  const materialCache = new Map<string, PBRMaterial>();
+  const materialFor = (placed: PlacedStructure): PBRMaterial => {
     const colour = wallColourFor(placed);
     const key = colour.toHexString();
     const existing = materialCache.get(key);
@@ -1089,16 +1120,27 @@ export function buildBattlefieldProps(scene: Scene, battlefield: Battlefield): B
    */
   const heightAt = (x: number, z: number): number => battlefield.terrain.heightAt(x, z);
 
-  const ballastMaterial = makeMaterial(scene, 'prop-ballast', PALETTE.ballast);
-  const cessMaterial = makeMaterial(scene, 'prop-cess', PALETTE.cess);
-  const poleMaterial = makeMaterial(scene, 'prop-pole', PALETTE.pole);
-  const sleeperMaterial = makeMaterial(scene, 'prop-sleeper', PALETTE.sleeper);
-  const railMaterial = makeMaterial(scene, 'prop-rail', PALETTE.rail);
-  const roadMaterial = makeMaterial(scene, 'prop-road', PALETTE.road);
-  const trackMaterial = makeMaterial(scene, 'prop-track', PALETTE.track);
-  const deckMaterial = makeMaterial(scene, 'prop-deck', PALETTE.deck);
-  const postMaterial = makeMaterial(scene, 'prop-post', PALETTE.post);
-  const platformMaterial = makeMaterial(scene, 'prop-platform', PALETTE.platform);
+  // Ballast at 1.6 m per tile: the chips read as roughly life-size to a player standing on the
+  // formation, which is what makes the line look like crushed stone rather than grey paint.
+  const ballastMaterial = makeMaterial(scene, 'prop-ballast', PALETTE.ballast, 'ballast', 1.6, {
+    normalStrength: 1.3,
+  });
+  const cessMaterial = makeMaterial(scene, 'prop-cess', PALETTE.cess, 'ground', 6);
+  const poleMaterial = makeMaterial(scene, 'prop-pole', PALETTE.pole, 'steel', 1.8);
+  // Creosoted timber. The grain running along the sleeper's length is what stops a line of them reading
+  // as a striped ribbon.
+  const sleeperMaterial = makeMaterial(scene, 'prop-sleeper', PALETTE.sleeper, 'timber', 2.4);
+  // The brightest, most reflective surface on the map, and the one V6 already found the owner could
+  // not see. The rail-steel texture keeps that: a polished crown and rusty web.
+  const railMaterial = makeMaterial(scene, 'prop-rail', PALETTE.rail, 'rail', 1.2, {
+    metallic: 1,
+    roughness: 0.55,
+  });
+  const roadMaterial = makeMaterial(scene, 'prop-road', PALETTE.road, 'road', 4);
+  const trackMaterial = makeMaterial(scene, 'prop-track', PALETTE.track, 'road', 4);
+  const deckMaterial = makeMaterial(scene, 'prop-deck', PALETTE.deck, 'timber', 1.2);
+  const postMaterial = makeMaterial(scene, 'prop-post', PALETTE.post, 'steel', 1.8);
+  const platformMaterial = makeMaterial(scene, 'prop-platform', PALETTE.platform, 'plaster', 2.2);
 
   let railwayLengthM = 0;
   let roadLengthM = 0;

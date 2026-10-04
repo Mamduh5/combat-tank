@@ -17,6 +17,9 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "assets": "node tools/build-assets.mjs",
+    "assets:check": "node tools/build-assets.mjs --check",
+    "assets:audit": "node tools/audit-assets.mjs",
     "sim": "node tools/sim.mjs",
     "routes": "node tools/measure-routes.mjs",
     "contact": "node tools/measure-contact.mjs",
@@ -24,10 +27,12 @@
     "grounding-shots": "node tools/grounding-shots.mjs",
     "shots": "node tools/shots.mjs",
     "controls": "node tools/control-check.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test"
+    "verify": "npm run typecheck && npm run lint && npm run test",
+    "verify:browser": "npm run build && npm run assets:audit"
   },
   "dependencies": {
-    "@babylonjs/core": "^9.28.0",
+    "@babylonjs/core": "9.29.0",
+    "@babylonjs/loaders": "9.29.0",
     "@dimforge/rapier3d-compat": "^0.21.0"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import { Engine } from '@babylonjs/core/Engines/engine.js';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { Simulation } from '../core/sim/world.js';
 import { Battle } from '../core/battle/battle.js';
 import type { CombatResult } from '../core/combat/combat-resolver.js';
@@ -13,10 +14,13 @@ import { PhysicsWorld } from './physics/rapier-terrain.js';
 import { createScene } from './render/scene.js';
 import { buildBattlefieldProps } from './render/battlefield-props.js';
 import { MARLOWE_CROSSING } from '../core/world/maps/marlowe-crossing.js';
-import { CombatAudio } from './audio/combat-audio.js';
-import { ShellEffects } from './render/shell-effects.js';
-import { TankVisual } from './render/tank-visual.js';
+import { CombatAudio, type EngineInput, type ListenerPose } from './audio/combat-audio.js';
+import type { Tank } from '../core/vehicle/tank.js';
+import { CombatEffects } from './render/shell-effects.js';
+import { VehicleVisual } from './render/vehicle-visual.js';
+import { loadVehicleRig } from './assets/vehicle-asset.js';
 import { Hud } from './ui/hud.js';
+
 
 /**
  * Client entry point for **V1 — Movement & Camera Sandbox**.
@@ -55,6 +59,17 @@ const MAX_BATTLE_CATCHUP_TICKS = 5;
 /** Screen-shake duration and magnitude when the player is penetrated, seconds and metres. */
 const HIT_SHAKE_SECONDS = 0.28;
 const HIT_SHAKE_MAGNITUDE = 0.32;
+
+/**
+ * Screen shake when the player *fires*, seconds and metres.
+ *
+ * Smaller than the hit shake, deliberately. Being shot is something that happens to you; firing is something
+ * you chose, and shaking the view you are aiming through as a reward for shooting is an annoyance. This is
+ * just enough to feel the gun's weight.
+ */
+const FIRE_SHAKE_SECONDS = 0.22;
+const FIRE_SHAKE_MAGNITUDE = 0.055;
+
 
 /** Hide the control hint once the player has driven far enough to have clearly understood it. */
 const HINT_HIDE_DISTANCE_M = 25;
@@ -103,24 +118,33 @@ async function bootstrap(): Promise<void> {
   // itself takes a definition and knows nothing about the battlefield, which is what lets one builder serve
   // both vehicles; the map is supplied here, where the map is actually known.
   const groundAt = (x: number, z: number) => simulation.terrain.heightAt(x, z);
-  const tankVisual = new TankVisual(scene, simulation.vehicle.definition, 'player', undefined, groundAt);
+
+  // --- Vehicle models (V7 asset pipeline) -----------------------------------------------
+  // Both vehicles are loaded as glTF before the first frame. Awaiting here rather than lazily is
+  // deliberate: the game must not start with a half-built tank, and a model that fails its contract should
+  // produce a clear error on the page instead of a tank that silently loses its gun mid-battle.
+  const playerRig = await loadVehicleRig(scene, simulation.vehicle.definition);
+  const tankVisual = new VehicleVisual(playerRig, scene, groundAt);
+  console.info(`Combat Tank: player model loaded (${playerRig.normalisationNote})`);
+
+  // The opponent is drawn from the same pipeline and the same visual code, so a model change applies to
+  // both. Its variant differs the **silhouette** — longer hull, lower and wider turret, longer gun — as well
+  // as the palette. Shape rather than colour alone, because two tanks differing only in colour are
+  // genuinely hard to tell apart at range, through fog, or for a colour-blind player.
+  let targetVisual: VehicleVisual | null = null;
+  if (simulation.target !== null) {
+    const targetRig = await loadVehicleRig(scene, simulation.target.definition);
+    targetVisual = new VehicleVisual(targetRig, scene, groundAt);
+    console.info(`Combat Tank: opponent model loaded (${targetRig.normalisationNote})`);
+  }
+
   const orbitCamera = new OrbitCamera(camera, physics);
-  const effects = new ShellEffects(scene);
+  const effects = new CombatEffects(scene);
 
-  // Prototype combat audio. Created lazily on the first user gesture, because browsers refuse to start
-  // an AudioContext before one, and a silent game that only becomes audible after the first click reads
-  // as broken.
+  // Combat audio. The graph is created lazily on the first user gesture, because browsers refuse to start an
+  // AudioContext before one, and a silent game that only becomes audible after the first click reads as broken.
+  // The sound assets themselves load in the background once that gesture arrives.
   const audio = new CombatAudio();
-
-  // The opponent, drawn from the same visual code as the player's tank so a model change applies to
-  // both. It uses the `opponent` variant, which differs the **silhouette** (longer hull, lower rounded
-  // turret, deeper bustle) as well as the palette. Shape rather than colour alone, because two tanks
-  // differing only in colour are genuinely hard to tell apart at range, through fog, or for a
-  // colour-blind player.
-  const targetVisual =
-    simulation.target === null
-      ? null
-      : new TankVisual(scene, simulation.target.definition, 'opponent', undefined, groundAt);
 
   const input = new InputManager(canvas);
   input.setLockListener((locked) => {
@@ -248,6 +272,11 @@ async function bootstrap(): Promise<void> {
     advanceBattle(deltaSeconds, command);
     physics.step();
 
+    // The listener pose, recomputed once per frame from the settled camera and shared by every spatial call
+    // below. Deriving it here rather than inside the audio layer keeps the camera the single source of truth
+    // for "where am I listening from".
+    const listenerPose = listenerPoseFor(camera);
+
     // Restart is polled here rather than bound to a key handler, so it works whether or not the pointer
     // is locked and cannot be missed on the frame the banner appears.
     if (restartRequested) {
@@ -296,14 +325,16 @@ async function bootstrap(): Promise<void> {
     );
 
     // 6. Presentation effects for the shells and impacts the simulation reported this frame.
-    //    Muzzle flashes are driven by shots the core actually accepted, so a flash always means a
-    //    round was fired, never merely that the button was pressed.
+    //    Everything here is driven by what the core actually accepted, so an effect always means the
+    //    simulation did the thing — never merely that a key was pressed.
     for (const impact of simulation.impacts) {
-      effects.showImpact(impact);
-    }
-    if (shotsFiredThisFrame > 0) {
-      const muzzle = simulation.vehicle.gunPivotPosition;
-      effects.showMuzzleFlash(muzzle);
+      effects.showImpact(
+        impact,
+        // The core deliberately splits "where and how did it hit" (V2) from "what does that do" (V3), so the
+      // outcome is not on the impact. Terrain impacts have no verdict at all, which is the default.
+        'impacted',
+        new Vector3(impact.incomingDirection.x, impact.incomingDirection.y, impact.incomingDirection.z),
+      );
     }
     effects.update(simulation.shells.inFlight, deltaSeconds);
 
@@ -379,44 +410,66 @@ async function bootstrap(): Promise<void> {
         hud.showIncomingHit(verdict, incoming.kind, sub);
       }
 
-      // Sound by outcome, so the player learns the four cases apart by ear.
-      const rangeM = distanceBetween(camera.position, incomingImpactPoint(incoming));
+      // Sound by outcome, so the player learns the four cases apart by ear. Each is a separate asset with its
+      // own spectrum — a penetration is a low crunch and a blocked hit a bright clang — rather than one
+      // impact sound at different volumes, which the ear cannot reliably tell apart.
+      const impactPoint = incomingImpactPoint(incoming);
       if (incoming.kind === 'ricocheted') {
-        audio.ricochet(rangeM);
+        audio.ricochet(listenerPose, impactPoint);
       } else if (incoming.kind === 'blocked') {
-        audio.impact(rangeM);
+        audio.blocked(listenerPose, impactPoint);
       } else if (incoming.kind === 'armour-miss') {
-        audio.dirt(rangeM);
+        audio.terrainImpact(listenerPose, impactPoint);
       } else {
-        audio.impact(rangeM);
-        audio.destroy(rangeM * 0.4);
-        // A short screen shake on a penetration that hurts. Restrained on purpose: it is there to
-        // make the hit *felt*, and an effect the player cannot control is an annoyance.
+        // A penetration that hurts is the most important feedback in the game, so it gets the shell impact,
+        // the vehicle's destruction thump, and a screen shake together.
+        audio.penetration(listenerPose, impactPoint);
+        audio.destruction(listenerPose, impactPoint);
+        effects.showDestruction(new Vector3(impactPoint.x, impactPoint.y, impactPoint.z));
         orbitCamera.shake(HIT_SHAKE_SECONDS, HIT_SHAKE_MAGNITUDE);
       }
     }
 
-    // 10. Outgoing shot and impact sounds, plus the muzzle flash.
+    // 10. The player's own shot: recoil, muzzle blast, and report.
+    //
+    // All three are driven from the same `shotsFiredThisFrame` counter, which is derived from the
+    // simulation's own tally rather than from the fire button. A request the gun refused during a reload
+    // therefore produces no recoil, no flash, and no sound — exactly as it produces no shot.
     if (shotsFiredThisFrame > 0) {
-      audio.fire(0);
-      effects.showMuzzleFlash(simulation.vehicle.gunPivotPosition);
+      const muzzle = tankVisual.getMuzzleWorldPosition();
+      // The barrel's world direction, read from the model's own muzzle marker and trunnion rather than
+      // re-derived from the simulation's gun vector, so the blast always comes out of the visible barrel.
+      const barrelForward = muzzle
+        .subtract(tankVisual.vehicleRig.gun.getAbsolutePosition())
+        .normalize();
+      effects.fireGun(muzzle, barrelForward);
+      tankVisual.fireRecoil();
+      audio.gunFire(listenerPose, muzzle);
+      // A short camera shake. Restrained on purpose: the player must keep their aim, so this is felt rather
+      // than seen.
+      orbitCamera.shake(FIRE_SHAKE_SECONDS, FIRE_SHAKE_MAGNITUDE);
     }
+
+    // 11. The player's impacts. The enemy's own hits on it were handled above as incoming, so they are
+    // skipped here rather than being played twice.
     for (const impact of simulation.impacts) {
-      const rangeM = distanceBetween(camera.position, impact.position);
-      if (impact.targetKind === 'vehicle') {
-        if (impact.targetId === simulation.vehicle.definition.id) {
-          continue; // Already handled as an incoming hit above.
-        }
-        audio.impact(rangeM);
-      } else {
-        audio.dirt(rangeM);
+      if (impact.targetKind !== 'vehicle' || impact.targetId === simulation.vehicle.definition.id) {
+        audio.terrainImpact(listenerPose, impact.position);
       }
     }
 
-    // 11. Battle outcome. Checked after combat so a killing shot is reflected in the same frame.
+    // 12. Battle outcome. Checked after combat so a killing shot is reflected in the same frame.
     if (battle.state === 'victory' || battle.state === 'defeat') {
       const won = battle.state === 'victory';
-      audio.destroy(won ? distanceBetween(camera.position, simulation.target?.state.position ?? camera.position) : 0);
+      const wreckAt = simulation.target?.state.position ?? camera.position;
+      audio.destruction(listenerPose, wreckAt);
+      // A confirming or failing UI tone, so the player knows the result by ear as well as by the banner. This
+      // is the "basic UI/battle-result feedback" category the brief asks for.
+      if (won) {
+        audio.uiConfirm();
+      } else {
+        audio.uiFail();
+      }
       hud.showBattleOutcome(
         won,
         simulation.telemetry.shotsFired,
@@ -427,13 +480,15 @@ async function bootstrap(): Promise<void> {
       hud.showRestartHint(true);
     }
 
-    // 12. Engine loops, driven from each vehicle's own speed.
-    audio.updateEngines(
-      simulation.vehicle.state.speedMps,
-      simulation.vehicle.definition.powertrain.maxSpeedMps,
-      simulation.target?.state.speedMps ?? 0,
-      simulation.target?.definition.powertrain.maxSpeedMps ?? 1,
-      simulation.target !== null && !simulation.target.damage.destroyed,
+    // 13. The continuous loops: engine, tracks, and turret servo.
+    //
+    // Fed from each vehicle's *own* telemetry rather than from a shared "engine loudness" number, because
+    // the brief asks that the player hear the tank working harder when they ask more of it — and that means
+    // throttle, acceleration, and speed separately, not one blended value.
+    audio.updateEngine(
+      engineInputFor(simulation.vehicle, command),
+      simulation.target === null ? null : engineInputFor(simulation.target, null),
+      simulation.vehicle.telemetry.turretTraverseRateDegPerSec,
       deltaSeconds,
     );
 
@@ -507,6 +562,22 @@ async function bootstrap(): Promise<void> {
     if (event.key === 'm' || event.key === 'M') {
       audio.setMuted(!audio.isMuted);
     }
+    // Volume down/up in ten-point steps, and a reset to the authored balance on 0. Number keys and the
+    // bracket keys are the near-universal convention, and using them means the player does not have to guess.
+    // Ten points rather than five: a game this loud has plenty of range to give away, and coarse steps make
+    // it impossible to settle on "just under". Muting with M still works at any volume, so reaching zero is
+    // never a trap.
+    if (event.key === '-' || event.key === '_') {
+      audio.setVolume(audio.volume - 0.1);
+    }
+    if (event.key === '=' || event.key === '+') {
+      audio.setVolume(audio.volume + 0.1);
+    }
+    if (event.key === '0') {
+      // 0 resets to the authored mix rather than to silence. Silencing is what M is for; binding 0 to
+      // "inaudible" would make the obvious key do something the player cannot undo without reading the docs.
+      audio.setVolume(1);
+    }
     // C returns the camera behind the hull. The escape hatch for a player who has orbited the camera
     // round to the front and can no longer tell which way their tank is pointing. Bound on the window
     // for the same reason as restart: it has to work with the pointer locked or unlocked.
@@ -532,6 +603,9 @@ async function bootstrap(): Promise<void> {
       scene,
       tankVisual,
       targetVisual,
+      // Exposed so the screenshot and audio tools can assert against the real graph — checking that the loops
+      // exist and that a shot produced voices — rather than screenshotting a silent game and calling it a pass.
+      audio,
       // Exposed so the screenshot tools can assert the environment actually built something, rather
       // than a screenshot that happens to look empty for reasons nobody recorded.
       props,
@@ -620,6 +694,61 @@ function incomingImpactPoint(result: CombatResult): { x: number; y: number; z: n
 /** Distance between two points. */
 function distanceBetween(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
   return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+}
+
+/**
+ * The listener's pose for spatial audio, derived from the camera.
+ *
+ * Recomputed each frame rather than cached, because the camera's yaw is mouse-driven and changes constantly.
+ * The right vector is `forward` rotated by a quarter turn about +Y, which in Babylon's left-handed space is
+ * `(forwardZ, -forwardX)` — the same basis the simulation's heading uses, so audio pans the same way the world
+ * turns. Getting this backwards is audible: a sound to the player's right would come out of the left speaker,
+ * which is worse than no spatialisation at all.
+ */
+function listenerPoseFor(camera: {
+  position: { x: number; y: number; z: number };
+  getTarget: () => { x: number; y: number; z: number };
+}): ListenerPose {
+  const dx = camera.getTarget().x - camera.position.x;
+  const dz = camera.getTarget().z - camera.position.z;
+  const length = Math.hypot(dx, dz);
+  const forwardX = length > 1e-6 ? dx / length : 0;
+  const forwardZ = length > 1e-6 ? dz / length : 1;
+  return {
+    position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    forwardX,
+    forwardZ,
+    rightX: forwardZ,
+    rightZ: -forwardX,
+  };
+}
+
+/**
+ * Builds the audio layer's view of one vehicle's motion.
+ *
+ * Throttle comes from the vehicle's own telemetry — what the driver asked for — rather than from the raw
+ * input command, so the engine responds to the *demand* even while the drive is traction-limited or the tank is
+ * stalled on a hill. That distinction is the whole point: a tank flooring it against a slope it cannot climb
+ * should sound like it is working hard, because it is.
+ *
+ * @param command the player's input command, or null for the opponent, whose input comes from its controller
+ */
+function engineInputFor(vehicle: Tank, command: InputCommand | null): EngineInput {
+  const telemetry = vehicle.telemetry;
+  const requestedThrottle = telemetry.requestedThrottle;
+  return {
+    speedMps: vehicle.state.speedMps,
+    maxSpeedMps: vehicle.definition.powertrain.maxSpeedMps,
+    // The command's throttle is preferred when available, because it is this frame's demand rather than the
+    // previous tick's; the telemetry value is the fallback and the only source for the opponent.
+    throttle: command !== null ? command.throttle : requestedThrottle,
+    accelMps2: telemetry.accelMps2,
+    // 0.35 m/s rather than "zero": a tank creeping at walking pace is still moving its tracks, and cutting the
+    // track loop at exactly zero makes stopping sound like a bug rather than like stopping.
+    stopped: Math.abs(vehicle.state.speedMps) < 0.35,
+    // A destroyed vehicle's engine dies away rather than cutting, which the audio layer eases.
+    gainScale: telemetry.destroyed ? 0 : 1,
+  };
 }
 
 bootstrap().catch((error: unknown) => {

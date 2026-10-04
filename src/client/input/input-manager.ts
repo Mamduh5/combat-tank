@@ -155,9 +155,24 @@ export class InputManager {
     this.onLockChange = listener;
   }
 
-  /** Requests mouse capture, so mouse movement drives the camera without a visible cursor. */
+  /**
+   * Requests mouse capture, so mouse movement drives the camera without a visible cursor.
+   *
+   * Modern browsers return a promise from `requestPointerLock`, and it rejects routinely: the user may deny
+   * the prompt, the document may not be focused, or the API may be blocked outright. `void`-ing the promise
+   * silences the *lint*, not the rejection — an unhandled one still reaches the console as
+   * `WrongDocumentError` or `NotAllowedError`, which reads like a game fault when it is a browser policy.
+   *
+   * Pointer capture is a convenience here, not a requirement: the game is fully playable with a visible
+   * cursor via the arrow keys and the reticle. So a refusal is logged once and otherwise ignored.
+   */
   requestPointerLock(): void {
-    void this.target.requestPointerLock();
+    const result = this.target.requestPointerLock() as unknown;
+    if (result instanceof Promise) {
+      result.catch((error: unknown) => {
+        console.info('Combat Tank: pointer lock was declined; continuing with a visible cursor.', error);
+      });
+    }
   }
 
   /**

@@ -1,0 +1,79 @@
+{
+  "generatedBy": "tools/build-assets.mjs",
+  "provenance": "Generated in-project. No external assets. See docs/asset-provenance.md.",
+  "models": {
+    "ct-medium": {
+      "file": "models/ct-medium.glb",
+      "vehicleId": "placeholder-medium"
+    },
+    "ct-heavy": {
+      "file": "models/ct-heavy.glb",
+      "vehicleId": "enemy-medium"
+    },
+    "props": {
+      "file": "models/props.glb"
+    }
+  },
+  "textures": [
+    "textures/ground-detail-albedo.png",
+    "textures/ground-detail-normal.png",
+    "textures/ground-detail-mr.png",
+    "textures/ballast-albedo.png",
+    "textures/ballast-normal.png",
+    "textures/ballast-mr.png",
+    "textures/road-surface-albedo.png",
+    "textures/road-surface-normal.png",
+    "textures/road-surface-mr.png",
+    "textures/rail-steel-albedo.png",
+    "textures/rail-steel-normal.png",
+    "textures/rail-steel-mr.png",
+    "textures/painted-steel-albedo.png",
+    "textures/painted-steel-normal.png",
+    "textures/painted-steel-mr.png",
+    "textures/timber-albedo.png",
+    "textures/timber-normal.png",
+    "textures/timber-mr.png",
+    "textures/brick-albedo.png",
+    "textures/brick-normal.png",
+    "textures/brick-mr.png",
+    "textures/plaster-albedo.png",
+    "textures/plaster-normal.png",
+    "textures/plaster-mr.png",
+    "textures/foliage-albedo.png",
+    "textures/foliage-normal.png",
+    "textures/foliage-mr.png",
+    "textures/thatch-albedo.png",
+    "textures/thatch-normal.png",
+    "textures/thatch-mr.png",
+    "textures/corrugated-iron-albedo.png",
+    "textures/corrugated-iron-normal.png",
+    "textures/corrugated-iron-mr.png",
+    "textures/stone-albedo.png",
+    "textures/stone-normal.png",
+    "textures/stone-mr.png",
+    "textures/rubber-albedo.png",
+    "textures/rubber-normal.png",
+    "textures/rubber-mr.png",
+    "textures/sign-marlowe.png",
+    "textures/sign-stop.png"
+  ],
+  "audio": [
+    "audio/gun-crack.wav",
+    "audio/gun-blast.wav",
+    "audio/gun-thump.wav",
+    "audio/gun-tail.wav",
+    "audio/impact-penetration.wav",
+    "audio/impact-blocked.wav",
+    "audio/impact-ricochet.wav",
+    "audio/impact-terrain.wav",
+    "audio/destruction.wav",
+    "audio/turret.wav",
+    "audio/gun-mechanism.wav",
+    "audio/ui-confirm.wav",
+    "audio/ui-fail.wav",
+    "audio/engine-idle.wav",
+    "audio/engine-load.wav",
+    "audio/engine-full.wav",
+    "audio/tracks.wav"
+  ]
+}

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The V6 blocker: the tank floats above uneven ground.
  *
  * ## What this measures
@@ -9,8 +9,8 @@
  * track's lower edge actually ends up in world space, and compares that against the terrain under each
  * sample. The signed result is the number that matters:
  *
- *  - **positive** â€” daylight under the track. This is the reported bug.
- *  - **negative** â€” the track has sunk into the ground.
+ *  - **positive** — daylight under the track. This is the reported bug.
+ *  - **negative** — the track has sunk into the ground.
  *
  * Both are failures; the second is the one a naive "just lower the vehicle" fix creates, which is why the
  * brief forbids it and why this reports the pair together.
@@ -18,7 +18,7 @@
  * ## Why the transform is restated rather than shared
  *
  * The renderer uses Babylon's `node.rotation`, whose composition order is
- * `Ry(yaw) * Rx(pitch) * Rz(roll)` â€” not the intuitive `Rz * Rx * Ry`. Restating it here is deliberate:
+ * `Ry(yaw) * Rx(pitch) * Rz(roll)` — not the intuitive `Rz * Rx * Ry`. Restating it here is deliberate:
  * if the two implementations shared a helper, a change to the helper would change the measurement and the
  * thing being measured at the same time, and the measurement would stay green while the bug stayed real.
  * The browser probe in `tools/grounding-probe.js` re-measures the same quantity through Babylon's own
@@ -48,7 +48,7 @@ const SAMPLES_ALONG = 7;
  * A gap this large reads as daylight to the player rather than as a tolerance.
  *
  * Derived rather than guessed: at the orbit camera's usual 8-14 m standoff and a 40 degree vertical field
- * of view, a 0.12 m gap subtends about 0.5 degrees — roughly 8 pixels in a 760 px frame. That is the point
+ * of view, a 0.12 m gap subtends about 0.5 degrees � roughly 8 pixels in a 760 px frame. That is the point
  * at which it stops being a tolerance and becomes a visible dark line under the track, which is the thing
  * the owner is reporting. Anything below it is inside the error of the vehicle's own ground clearance.
  */
@@ -57,7 +57,7 @@ export const FLOATING_GAP_M = 0.12;
 /**
  * Maximum vertical travel of a track segment, metres.
  *
- * Restated from `tank-visual.ts` rather than imported, because that module pulls in Babylon and this tool
+ * Restated from `vehicle-visual.ts` rather than imported, because that module pulls in Babylon and this tool
  * runs headless with no renderer present. The duplication is deliberate and is pinned by
  * `tests/core/grounding.test.ts`, so the two cannot drift apart without a test failing.
  */
@@ -178,9 +178,9 @@ function toWorld(
  *
  * Called rather than restated. The earlier version of this file reimplemented the single-normal
  * decomposition inline, and when the core was fixed to fit a support plane this tool went on measuring the
- * *old* formula — reporting the bug as still present, against code that no longer existed. A measurement
+ * *old* formula � reporting the bug as still present, against code that no longer existed. A measurement
  * that keeps its own copy of the thing under test cannot detect the thing changing, which is the same
- * failure mode as the original contact-offset comment in `tank-visual.ts`.
+ * failure mode as the original contact-offset comment in `vehicle-visual.ts`.
  *
  * The remaining duplication is only the Babylon rotation composition in `toWorld`, which is restated for
  * the reason given there: it is a property of the engine, not of the code being measured, and the browser
@@ -233,7 +233,7 @@ export function measureGrounding(
   // ## Where the root actually sits
   //
   // The simulation's origin is the **hull floor**, held a ride height above the terrain. This model's origin
-  // is the **track contact line**, whose geometry reaches local y = 0. `tank-visual.ts` therefore subtracts
+  // is the **track contact line**, whose geometry reaches local y = 0. `vehicle-visual.ts` therefore subtracts
   // both the ride height and its own measured contact offset, and this reproduces that exactly:
   //
   //     rootY = (heightAt + groundClearanceM) - rideHeight - contactOffset
@@ -360,13 +360,13 @@ export function measureGrounding(
 }
 
 /**
- * The renderer's measured clearance, restated for a headless run. See `TankVisual.measureContactOffset`.
+ * The renderer's measured clearance, restated for a headless run. See `VehicleVisual.debugContactOffsetM`.
  *
  * The track box is centred at `trackHeightM / 2` in root space, so its lower edge sits at exactly zero;
  * the track links and road wheels stand proud of the track but do not reach lower. The measured offset is
  * therefore zero, which means the entire flat-ground clearance is the simulation's own `groundClearanceM`
  * of 0.48 m. The renderer subtracts this from the simulation's ride height, so the two cancel on flat
- * ground — which is exactly why flat ground looks right and only uneven ground does not.
+ * ground � which is exactly why flat ground looks right and only uneven ground does not.
  */
 export function headlessContactOffsetM(): number {
   return 0;
@@ -513,8 +513,8 @@ export function reportGrounding(): { text: string; readings: GroundingReading[] 
  *
  * ## Why this exists
  *
- * The brief requires verifying on *perfectly flat* ground, and the obvious way to get it — sampling a
- * point and assuming it is flat — is exactly the assumption that produced the last two rounds of
+ * The brief requires verifying on *perfectly flat* ground, and the obvious way to get it � sampling a
+ * point and assuming it is flat � is exactly the assumption that produced the last two rounds of
  * confusion. The railway formation is level, but it is level because a `LevelCorridor` forces it to be,
  * and it carries ballast and sleeper props; a vehicle parked there is standing on a mesh rather than on
  * ground, so it cannot tell us what happens on honest flat terrain.

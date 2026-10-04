@@ -11,28 +11,32 @@ does not attempt to reproduce their content, branding, or exact mechanics.
 
 ## Project status
 
-> **Stage: V3 — Armor, Penetration & Damage. Implemented (2026-10-01).**
-> A stationary target tank now stands ahead of you. Shooting it reports **which plate** was struck, **at
-> what angle**, and whether the shell **penetrated**, was **blocked**, or **ricocheted** — with damage,
-> target HP, and any module knocked out shown on screen. Where you shoot genuinely matters: the sloped
-> front stops shells, the flank does not, and the thin rear reaches the engine.
+> **Stage: V7 — Asset & Audio Foundation. Implemented.**
 >
-> Automated validation passes (253 tests). Subjective readability still awaits human playtest.
+> The vehicles are now real glTF models with PBR materials — albedo, normal and metallic-roughness — on a
+> textured battlefield, and the audio responds to what the tank is actually doing. Engine note, tracks and
+> turret servo follow throttle, speed and acceleration; gunfire is layered and spatialised; and the four
+> combat outcomes (penetration, blocked, ricochet, miss) are told apart by ear as much as on screen.
 >
-> **V1** (movement and camera) and **V2** (turret, gun, ballistics) remain complete and unchanged; their
-> subjective feel items are recorded as *pending product playtest*.
+> Every model, texture and sound is **generated in-project** by `npm run assets` — nothing is downloaded or
+> licensed. See `docs/asset-provenance.md`.
 >
-> **V4 has not been started.** The target does not move, aim, or fire — it is a shooting target, not an
-> opponent.
+> Automated validation passes (459 tests), plus a headless-browser audit that checks orientation, scale,
+> materials and the audio graph against the live scene.
+>
+> **Not yet verified by a human.** Whether the vehicles look good and whether the audio sounds good are
+> judgements no automated check can make. V7 is not final until it has been played with sound enabled.
+>
+> Gameplay is V6 — Marlowe Crossing, positioning, cover, and an opponent that fights through the same rules —
+> and is unchanged by this version.
 
-Current capabilities: heavy rate-limited driving and hull traverse; an independent rate-limited turret
-with a full 360° ring; a gun with elevation/depression limits and a reload cycle; shells with travel
-time and gravity drop; a data-driven armour model where **where you hit decides the outcome**;
-deterministic penetration, ricochet and damage; spatially-meaningful module damage; and a hit-feedback
-panel showing the numbers behind every verdict.
+Current capabilities: a data-driven battle on a rural-railway battlefield with an autonomous opponent;
+plate-based armour where **where you hit decides the outcome**; deterministic penetration, ricochet and
+damage; module damage that matters tactically; terrain-conforming tracks; and now a full asset and audio
+foundation underneath all of it.
 
-There is **no armour quality, dispersion, crew, fire, enemies that fight back, AI, or multiplayer** —
-those are later versions by design.
+There is **no crew, dispersion, fire, team battle modes, progression, or multiplayer** — those are later
+versions by design.
 
 ---
 
@@ -56,6 +60,11 @@ Click the window to capture the mouse, then drive.
 | Mouse | Aim the turret and camera — **never turns the hull** |
 | Left mouse button | Fire (the gun must be loaded) |
 | Mouse wheel | Zoom in / out |
+| `C` | Snap the camera back behind the hull |
+| `R` | Restart the battle |
+| `M` | Mute |
+| `-` / `=` | Master volume down / up |
+| `0` | Reset volume to the authored level |
 | `Esc` | Release the mouse cursor |
 
 Arrow keys mirror WASD. The camera, hull, and turret are three separate systems: you can look one way,
@@ -77,7 +86,10 @@ faces the same way you do, so its rear is toward you at the beginning.
 | `npm run lint` | ESLint, including the core-purity rules |
 | `npm test` | Vitest suite |
 | `npm run sim` | **Headless batch battles** — real AI fights with no renderer, plus an aggregate report |
-| `npm run verify` | **typecheck + lint + test** — the gate a version must pass |
+| `npm run assets` | **Regenerate every model, texture and sound** from source, deterministically |
+| `npm run assets:audit` | **Boot the real game in headless Chrome** and assert orientation, scale, materials and audio |
+| `npm run verify` | **typecheck + lint + test** — the fast gate a version must pass |
+| `npm run verify:browser` | Build, then run the browser audit — the slow gate, before owner review |
 
 ### Layout
 
@@ -110,6 +122,9 @@ that the rule actually fires.
 | [`docs/decisions/README.md`](docs/decisions/README.md) | How architectural decisions are recorded (ADR process) | **Authoritative** for decision records |
 | [`docs/assumptions.md`](docs/assumptions.md) | Planning assumptions made without owner confirmation | Reference; revisit when the owner decides |
 | [`docs/harness.md`](docs/harness.md) | How to use `npm run sim`, and how to read what it prints | Reference |
+| [`docs/asset-pipeline.md`](docs/asset-pipeline.md) | The model node contract, what the loader normalises, and how to replace the assets | **Authoritative** for asset contracts |
+| [`docs/asset-provenance.md`](docs/asset-provenance.md) | Where every asset came from, and the licence position | **Authoritative** for licensing |
+| [`docs/audio-design.md`](docs/audio-design.md) | Audio categories, layering, spatialisation, and the controls | Reference for audio |
 
 **Conflict rule:** if two documents disagree, the more specific one wins for its subject matter
 (architecture beats vision on *how*; vision beats architecture on *what*). If a conflict is still

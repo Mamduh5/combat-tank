@@ -749,8 +749,85 @@ is pleasant to drive on, and **none of that has been played**. Everything above 
 by the headless harness, and by screenshots from gameplay camera height. V6 is not final until the owner has
 played it.
 
-## V7 — Tactical Team Skirmish
+## V7 — Asset & Audio Foundation
 
+**Status: implemented.** Presentation and pipeline only; gameplay is V6 and is unchanged.
+
+**Why this version exists.** V3R established that "geometry standing in for tanks" was a real shortfall, and
+V4–V6 fixed it by making the *game* better while leaving the tank built from primitives at runtime. Every
+screenshot review kept returning to the same note: the vehicles read as placeholders. This version replaces
+that layer properly, and in doing so establishes the pipeline that real art will later drop into.
+
+**Player-visible result:** the vehicles are textured PBR models with normal maps, on a textured battlefield.
+Engine, tracks, turret servo and gunfire respond to what the tank is doing and where it is. The four combat
+outcomes are told apart by ear as well as on screen.
+
+### Delivered
+
+- **Asset pipeline** — `tools/build-assets.mjs` and `tools/lib/*` generate 62 files (3 glTF models, 41 PNG
+  textures, 17 WAV sounds, a manifest) deterministically and with no external inputs. See
+  `docs/asset-pipeline.md` and `docs/asset-provenance.md`.
+- **Model contract** — metres, Y-up, +Z forward, with a named node hierarchy. `loadVehicleRig` validates it,
+  measures scale, and corrects orientation. `VehicleVisual` poses the result and contains no glTF knowledge.
+- **PBR materials** — albedo, normal and packed metallic-roughness, with tiling and anisotropic filtering. The
+  terrain keeps V6's approved height-band vertex colouring and gains a detail texture.
+- **Spatial audio** — stereo placement, distance attenuation and arrival delay, a pooled voice pool, and a
+  limiter. See `docs/audio-design.md`.
+- **Engine audio** — three loops cross-faded by throttle, speed and acceleration, plus tracks and turret servo.
+- **Combat VFX** — pooled muzzle blast, tracer, impact, penetration, destruction, dust and smoke, each
+  distinguished by shape and direction as well as by sound.
+- **Master volume** — `-` / `=` in ten-point steps, `0` to reset. The V4 `M` mute is unchanged.
+
+### Verification
+
+This version added a browser-level gate, because **every serious defect found during it passed every other
+gate**. The type checker, the linter and the full unit suite were green while the game rendered a tank that
+could not turn and was 26% the wrong size.
+
+Four real bugs were found and fixed, each invisible to static analysis:
+
+1. **Version skew.** `@babylonjs/core` 9.28 with `@babylonjs/loaders` 9.29 — the loader called a `Scene` method
+   that did not exist. Each package ships its own types, so nothing complained. Both are now pinned exactly.
+2. **The tank could not turn.** Babylon ignores Euler angles whenever `rotationQuaternion` is set, and the
+   glTF loader sets one for handedness conversion. Every yaw the renderer wrote was discarded.
+3. **The loader could not find the hull.** A glTF node carrying geometry becomes an `AbstractMesh`, not a
+   `TransformNode`, so the search found the empty root and nothing else.
+4. **The hull was 26% too short.** Five proportions the hull builder read were never supplied, so half its
+   vertices were NaN. The file loaded, parsed and rendered; Babylon computed a finite bounding box from the
+   vertices that had survived.
+
+Gates now in place, cheapest first:
+
+| Gate | Catches |
+| --- | --- |
+| `npm run assets` | Non-finite geometry, before it is written. |
+| `npm run verify` | The generated *numbers* — NaN, proportions, hull length, node names, manifest. |
+| `npm run assets:audit` | Anything only a real browser shows: orientation, scale, materials, audio. |
+
+The orientation assertion is the one nothing else can make. `tests/client/controls.test.ts` compares helper
+functions to each other and never inspects a loaded mesh; a screenshot of a mirrored tank still looks like a
+tank.
+
+### Not verified by a human
+
+The pipeline is verified by measurement and by a headless browser audit. **Whether the vehicles look good, and
+whether the audio is good, are judgements no automated check can make.** The audio in particular has never been
+heard — the audit proves the graph builds, the buffers decode and the controls work, and nothing about whether
+it sounds right. V7 is not final until the owner has played it with sound enabled.
+
+### Explicitly deferred
+
+Real art, LOD, skeletal animation, music, reverb, distance-dependent filtering, and spatialising the
+opponent's engine. `props.glb` is generated and validated but not yet instanced by the battlefield renderer.
+
+---
+
+## V7 (as originally planned) — Tactical Team Skirmish
+
+> **Numbering note.** The plan above was re-scoped by the owner during V6: the asset and audio foundation was
+> promoted to V7, and the team-skirmish work below now falls after it. The rest of this document's V8+ sections
+> have **not** been renumbered, so treat the two V7 headings as the same milestone slot rather than two
+> separate versions.
 
 **Milestone: a proper tactical tank game (solo + AI).**
 

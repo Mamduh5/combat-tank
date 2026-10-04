@@ -27,7 +27,7 @@ import { cameraOffsetFromTarget } from '../../src/client/camera/orbit-camera.js'
 import {
   modelNoseWorldDirection,
   simulationForward as SIMULATION_FORWARD,
-} from '../../src/client/render/tank-visual.js';
+} from '../../src/client/render/vehicle-visual.js';
 import { Simulation } from '../../src/core/sim/world.js';
 import { PLACEHOLDER_TANK } from '../../src/shared/placeholder-tank.js';
 import { makeInput, NEUTRAL_INPUT } from '../../src/shared/input.js';
@@ -247,15 +247,17 @@ describe('the rendered model agrees with the simulation about which way is forwa
     // front/rear". The movement tests above all passed while this was broken, because they compare
     // against the simulation's own forward vector - and the simulation was never wrong.
     //
-    // The model is authored nose-at-+Z. `TankVisual` applied `-headingRad` as its yaw, on the stated
+    // The model is authored nose-at-+Z. The renderer once applied `-headingRad` as its yaw, on the stated
     // reasoning that Babylon is left-handed and needs the sign flipped. In Babylon's left-handed space
     // that is not a flip of direction, it is a **reflection**: `RotationY(-h)` sends local +Z to
     // `(-sin h, cos h)` instead of `(sin h, cos h)`. At h = 90 degrees the visible nose pointed exactly
     // backwards.
     //
-    // `modelYawFromHeading` and `SIMULATION_FORWARD` below are the contract in its simplest form. This
-    // test is the automated half of the fix; the rendered result is verified in the browser, because a
-    // numeric pass cannot show a player what the nose on screen is pointing at.
+    // Under V7 this contract is enforced in two places, because the model is no longer built in-process:
+    // `vehicle-asset.ts` normalises the loaded glTF's root rotation, and the helpers below state the same
+    // rule in numbers. `modelYawFromHeading` and `SIMULATION_FORWARD` are the contract in its simplest
+    // form. This test is the automated half of the fix; the rendered result is verified in the browser,
+    // because a numeric pass cannot show a player what the nose on screen is pointing at.
     for (const headingDeg of [0, 30, 45, 90, 135, 180, 270, 315]) {
       const heading = (headingDeg * Math.PI) / 180;
       const nose = modelNoseWorldDirection(heading);

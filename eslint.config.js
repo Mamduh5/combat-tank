@@ -70,7 +70,21 @@ const NON_DETERMINISTIC_MATH = [
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.config.js', '*.config.ts'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      '*.config.js',
+      '*.config.ts',
+      // Headless-Chrome profile directories. These are written by the screenshot and audit harnesses as a
+      // side effect of running, and they contain a browser's own vendored JavaScript — hundreds of files
+      // that are not ours and that we must not lint. Ignoring them by pattern means a harness can create
+      // one without anyone having to remember to update this file.
+      '.chrome-profile*/**',
+      // Generated asset output. Reproducible from `npm run assets` and not source.
+      'public/assets/**',
+      'shots/**',
+    ],
   },
 
   js.configs.recommended,
