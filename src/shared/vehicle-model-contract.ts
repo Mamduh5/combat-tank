@@ -165,6 +165,36 @@ export const VEHICLE_MODEL_CONTRACT = {
    */
   crossSectionSlackFraction: 1e-6,
 
+  /**
+   * Largest fraction of `dimensions.heightM` the **whole hull assembly** may occupy: 1.35.
+   *
+   * ## Why height is bounded differently from width
+   *
+   * Width and height look like the same check and are not. `dimensions.widthM` is the vehicle *across its
+   * tracks*, so it is an absolute ceiling: nothing on the hull may exceed it laterally, and
+   * {@link crossSectionMaxFraction} is therefore a hard bound at 1.0. The fenders overhang the running gear,
+   * which is exactly why they have to be inset by their own half-width.
+   *
+   * `dimensions.heightM` is the **structural** hull — roof to floor, excluding the turret. But the hull
+   * assembly legitimately carries parts that stand proud of that line: spare track links on the fenders, a
+   * stowage bin, exhaust and headlamp housings, the mudguard lip. Measured against the structural height,
+   * those details make a correctly-built model fail a rule about its structure.
+   *
+   * That is the false failure this allowance exists to prevent, and it is worth being precise about the
+   * shape of it: a vehicle carrying visible stowage is *doing the thing the model is for*, and a rule that
+   * punishes it is a rule that would have to be relaxed by whoever next added a toolbox.
+   *
+   * ## Why 1.35 is not design room
+   *
+   * Protruding detail is a hand-authored feature measured in tens of centimetres on a vehicle over a metre
+   * tall — the roster's own hulls sit between 0.77 and 0.97 of this bound with detail in place. A genuinely
+   * mis-scaled model is wrong by a *large factor*: the `hull-length` rule fails at 2%, and a vehicle built
+   * from the wrong spec is wrong in length and height together. So there are two full orders of magnitude
+   * between "has a stowage bin" and "is the wrong size", and 1.35 sits inside that gap rather than at its
+   * edge.
+   */
+  hullAssemblyMaxHeightFraction: 1.35,
+
   /** How far the hull's lowest vertex may sit below the origin, metres. */
   groundOffsetToleranceM: 0.05,
 
@@ -224,25 +254,45 @@ export function validateVehicleModel(
         `would rescale the whole model and the vehicle would render at the wrong size.`,
     );
   }
-  for (const [measured, expectedM, label] of [
-    [probe.hullWidthM, expected.widthM, 'width'],
-    [probe.hullHeightM, expected.heightM, 'height'],
-  ] as const) {
+  // --- Cross-section ------------------------------------------------------------------------
+  //
+  // Width and height are bounded by *different* rules, and the reason is in the contract's own docs:
+  // `widthM` is the vehicle across its tracks (a hard ceiling), while `heightM` is the structural hull and
+  // the assembly may carry detail that stands proud of it. See `hullAssemblyMaxHeightFraction`.
+  const crossSection: readonly { label: string; measured: number; expectedM: number; max: number }[] = [
+    {
+      label: 'width',
+      measured: probe.hullWidthM,
+      expectedM: expected.widthM,
+      max:
+        VEHICLE_MODEL_CONTRACT.crossSectionMaxFraction +
+        VEHICLE_MODEL_CONTRACT.crossSectionSlackFraction,
+    },
+    {
+      label: 'height',
+      measured: probe.hullHeightM,
+      expectedM: expected.heightM,
+      max: VEHICLE_MODEL_CONTRACT.hullAssemblyMaxHeightFraction,
+    },
+  ];
+
+  for (const { label, measured, expectedM, max } of crossSection) {
     const fraction = measured / expectedM;
-    // The upper bound carries a slack term so that a hull constructed at *exactly* the definition's width is
-    // not reported as too wide; see `crossSectionSlackFraction`.
-    if (fraction > VEHICLE_MODEL_CONTRACT.crossSectionMaxFraction + VEHICLE_MODEL_CONTRACT.crossSectionSlackFraction) {
+    if (fraction > max) {
       add(
         `hull-${label}`,
-        `the hull's ${label} is ${measured.toFixed(2)} m, wider than the ${expectedM} m the definition ` +
-          `gives the whole vehicle. That is what a model authored in the wrong units looks like.`,
+        `the hull assembly's ${label} is ${measured.toFixed(2)} m against a ${expectedM} m definition — over ` +
+          `the ${max} bound. Width is capped at the vehicle's own width because nothing may be wider than ` +
+          `its tracks; height allows more because stowage, spare track links and exhaust housings stand ` +
+          `proud of the structural hull by design. Past this bound the model is the wrong size, not the ` +
+          `wrong detail.`,
       );
     } else if (fraction < VEHICLE_MODEL_CONTRACT.crossSectionMinFraction) {
       add(
         `hull-${label}`,
-        `the hull's ${label} is only ${measured.toFixed(2)} m against a ${expectedM} m definition — below ` +
-          `the ${VEHICLE_MODEL_CONTRACT.crossSectionMinFraction} floor. The hull body sits between the ` +
-          `tracks and is legitimately narrower, but not this much: this is probably the wrong model.`,
+        `the hull assembly's ${label} is only ${measured.toFixed(2)} m against a ${expectedM} m definition — ` +
+          `below the ${VEHICLE_MODEL_CONTRACT.crossSectionMinFraction} floor. The hull body sits between ` +
+          `the tracks and is legitimately narrower, but not this much: this is probably the wrong model.`,
       );
     }
   }

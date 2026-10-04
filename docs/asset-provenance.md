@@ -55,11 +55,34 @@ and that every file the manifest lists exists on disk.
 
 | Category | Source | File |
 | --- | --- | --- |
-| Vehicle models | `tools/lib/tank-model.mjs` + `tools/lib/mesh.mjs` | `models/ct-*.glb` |
+| Vehicle models | `tools/lib/tank-model.mjs` + `tools/lib/mesh.mjs` | `models/ct-medium.glb`, `models/ct-heavy.glb`, `models/ct-light.glb` |
 | Environment props | `tools/lib/prop-models.mjs` | `models/props.glb` |
 | Textures | `tools/lib/textures.mjs`, `texture-lib.mjs` | `textures/*.png` |
 | Audio | `tools/lib/sounds.mjs`, `wav.mjs` | `audio/*.wav` |
 | Manifest | `tools/build-assets.mjs` | `manifest.json` |
+
+## The three vehicle models
+
+All three are generated from the same builder, and this is worth stating plainly because it is the part most
+likely to be misread: **no vehicle model was authored by hand, imported, or adapted from an existing one.**
+`tools/lib/tank-model.mjs` holds three *specs* — blocks of proportions — and `buildTankModel(spec)` derives the
+absolute geometry. The vehicles differ because their specs differ.
+
+That is also the honest boundary of the "no third-party assets" claim above. The **forms are fictional**. The
+design language they draw on — a sloped glacis over a vertical lower plate, a turret set back from the hull
+centre, fenders, a stepped hull-over-tracks profile — is broadly recognisable tank design language, and no rule in
+the geometry or the model contract is derived from any real or commercial vehicle. No markings, insignia, names or
+identifying features of any real vehicle appear anywhere in the project.
+
+| Vehicle | Proportions that make it distinct |
+| --- | --- |
+| **Sabre** (`ct-medium`) | The reference. Balanced hull, gun, armour and mobility; the baseline every other spec is read against. |
+| **Anvil** (`ct-heavy`) | Larger hull fraction, more wheels, a longer barrel, and a profile that reads as a slab rather than a wedge. |
+| **Vex** (`ct-light`) | Small hull fraction, few and large wheels, a shorter barrel, and a hull proportion that reads low and light. |
+
+**Prototype quality is uniform and deliberate.** Every vehicle is the same 976 triangles and the same five meshes
+(hull, turret, gun, wheel, track), differing only in proportions and paint. They are schematic, and must not be
+presented as finished art.
 
 ## Determinism
 

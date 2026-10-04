@@ -205,7 +205,7 @@ result in `docs/decisions/`.
 
 | ID | Question | Urgency | Status |
 | --- | --- | --- | --- |
-| OD-01 | Vehicle class system | shaping (V8) | open |
+| OD-01 | Vehicle class system | shaping (V8) | open — **V8 deliberately did not pre-empt it**; three distinct vehicles ship with descriptive role labels that nothing branches on |
 | OD-02 | Driving control model | — | **resolved** — direct WASD |
 | OD-03 | Progression structure | shaping (V11) | open |
 | OD-04 | Ammunition roster | shaping (V3/V4) | open — **deliberately not decided in V2** |
@@ -219,13 +219,14 @@ result in `docs/decisions/`.
 | OD-12 | Tank locomotion model | — | **resolved** — kinematic (ADR-0007) |
 | OD-13 | Target frame rate and hardware | shaping (V12) | open |
 | OD-14 | Platform, distribution, monetisation | deferred | open |
+| OD-15 | Opponent stops to settle its gun against a fleeing player | shaping (V12) | open — known trade-off, not a defect |
 
 ---
 
 ## Product and design decisions
 
 ### OD-01 — Vehicle class system
-**Urgency:** shaping (needed in V8) · **Status:** open
+**Urgency:** shaping (needed in V8) · **Status:** open — V8 deliberately did not pre-empt it
 
 Should Combat Tank have formal vehicle classes (light / medium / heavy / tank destroyer), and if
 so, what are they and what are they *for*?
@@ -238,6 +239,22 @@ classes for gameplay but not for progression.
 
 **Interim position:** V8 introduces three *distinct vehicles* (fast, generalist, slow) to prove the
 data model, explicitly without committing to a class taxonomy.
+
+**What V8 actually did, and what it means for this decision.** The roster ships three vehicles whose
+`role` field carries one of three labels — `generalist`, `bruiser`, `scout`. Those labels are
+**descriptive, not a taxonomy**: nothing in the code branches on `role`, no vehicle gains or loses a
+capability because of it, and deleting the field would not change a single rule. They exist because the
+selector has to say something to the player, and a wall of numbers is not a label.
+
+Distinctness is instead enforced **structurally**, by `validateRoster` in `src/shared/roster.ts`, which
+refuses a roster whose members differ only in a statistic: shared models, similar silhouettes, shared
+armour layouts, identical movement, identical guns or identical audio all fail at import. So the answer
+to "what makes these three different?" is currently *the data*, not a class name — which is precisely
+the position from which this decision can still be taken on its merits rather than retrofitted.
+
+**What the owner actually still needs to decide:** whether classes become a rule the code enforces (and
+therefore whether `role` grows a contract), or stay presentation. Either answer is compatible with what
+V8 built; neither requires unwinding it.
 
 ---
 

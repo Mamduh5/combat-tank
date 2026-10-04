@@ -908,6 +908,57 @@ opponent's engine. `props.glb` is generated and validated but not yet instanced 
 
 - **Depends on:** V7 (a mode worth choosing a vehicle for), V3 (armor data), V1 (movement data).
 
+### V8 delivery notes
+
+Recorded here so the next version reads what was actually built rather than what was planned. **Not owner-approved.**
+
+**Delivered.** Three vehicles (`ct-medium` / **Sabre**, `ct-heavy` / **Anvil**, `ct-light` / **Vex**), a
+data-driven roster with load-time schema *and* distinctness validation, per-vehicle audio profiles, a pre-battle
+selector, bot support for every roster member, a shared model contract checked at build and at load, and a
+roster-wide live audit.
+
+**Where the implementation differs from the plan above, and why.**
+
+- **`src/shared/vehicle-defs` became `src/shared/roster/` plus `vehicle-definition.ts`.** A single directory was
+  going to hold both the *schema* and the *catalogue*, which are different things with different lifetimes: the
+  schema is a contract every future vehicle must satisfy, the catalogue is this game's content. They are now
+  separate, and the roster is the only registry.
+- **`src/core/match` was not created.** The plan called for battle setup that applies progression modifiers. V8
+  instead keeps the encounter in `src/client/main.ts` and takes a matchup (two vehicle ids) as a parameter. This
+  is a *narrowing*, not a deferral: with no progression system in scope (OD-03 is undecided), a modifier layer
+  would have been a hook for a system that does not exist. The matchup parameter is what V11's modifier work
+  would extend.
+- **The selector shows four computed bars, not raw stats.** Protection, mobility, firepower and handling, each
+  computed from the definitions and normalised across the roster, plus role/tagline/strength/weakness. The brief
+  asked for meaningful differences without dumping every number, and a card reading `285 mm / 7.5 s / 1600 HP`
+  is a spreadsheet rather than a choice. Because the bars are computed, a retuned vehicle re-rates itself —
+  which is asserted by a test.
+- **The selector holds no state between sessions.** It is a content tool: it shows every vehicle every time, and
+  unlocking or remembering a choice would be the first step towards the garage V11 owns.
+
+**Two engineering decisions taken rather than escalated.** Both were numerical contract questions that did not
+materially alter visible vehicle proportions, so they were settled here and pinned by tests:
+
+- **`crossSectionSlackFraction` = 1e-6.** A hull constructed at exactly `widthM * 0.5` per side measured
+  `3.5000000000000004` m against a `3.5` m definition and failed a bare `> 1.0`. The test requires the slack to
+  stay at or below 1e-6 *and* below the length tolerance, so it cannot grow into a licence to absorb real scale
+  errors.
+- **`hullAssemblyMaxHeightFraction` = 1.35.** Width is a hard ceiling (nothing may be wider than its tracks);
+  height is not, because stowage, spare track links and exhaust housings legitimately stand proud of the
+  structural hull. The roster's hulls sit at 0.77–0.97 of this bound with detail in place, while a mis-scaled
+  model is caught by the 2% length rule — two orders of magnitude apart.
+
+**Bugs found by the new gates, which no earlier gate could have found.** Worth recording because they set the
+bar for V9's tooling: a temporal-dead-zone crash that stopped the client booting; a rig cache that served meshes
+already disposed, producing an *invisible* tank with no exception; `Matrix.transformPoint` reading translations
+from the wrong matrix row, which silently discarded **every** transform in the asset pipeline; and `box()`
+taking each box's depth from its width.
+
+**Known gap.** `tests/tools/asset-pipeline.test.ts` validates the model *as designed* via `buildTankModel`, not
+by re-reading the exported `.glb`. That is a deliberate trade (re-reading means reimplementing the exporter's
+handedness inside a test), but it means an exporter-introduced defect is caught by the manifest, the finite-value
+check and the browser audit rather than by the headless contract test. V9 should close this.
+
 ---
 
 ## V9 — Authoritative Multiplayer Foundation

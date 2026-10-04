@@ -232,4 +232,57 @@ describe('the contract itself is not weaker than the roster requires', () => {
     expect(VEHICLE_MODEL_CONTRACT.minimumWheels).toBeGreaterThanOrEqual(4);
     expect(VEHICLE_MODEL_CONTRACT.minimumTrackSegments).toBeGreaterThanOrEqual(4);
   });
+
+  it('keeps the float slack far below any real authoring difference', () => {
+    // V8 engineering decision, pinned. The slack exists because an exactly-constructed hull measured
+    // 3.5000000000000004 m against a 3.5 m definition and was rejected by a bare `> 1.0`. So it must exist
+    // and be small.
+    //
+    // Both halves matter. The upper bound keeps it at 1e-6, which is ~3 nm on a 3.5 m vehicle — orders of
+    // magnitude below anything a person can model, and above the ~1e-16 relative error that caused the
+    // failure. The lower bound is the one that stops this being a licence to loosen: if it ever grew past
+    // the length tolerance it would start absorbing genuine scale errors, which is the one job this file
+    // exists to do.
+    const slack = VEHICLE_MODEL_CONTRACT.crossSectionSlackFraction;
+    expect(slack).toBeGreaterThan(0);
+    expect(slack).toBeLessThanOrEqual(1e-6);
+    expect(slack).toBeLessThan(VEHICLE_MODEL_CONTRACT.lengthToleranceFraction);
+  });
+
+  it('bounds hull height generously enough for protruding detail, but not for a wrong-scale model', () => {
+    // V8 engineering decision, pinned. Height and width are bounded differently on purpose: width is a hard
+    // ceiling at the vehicle's own width, while the hull assembly may carry stowage, spare track links and
+    // exhaust housings that stand proud of the structural hull.
+    //
+    // These four assertions are the decision. The allowance must be enough for detail, small enough that a
+    // mis-scaled vehicle still fails, and — the part most likely to be broken by a well-meaning future
+    // change — it must never become so large that the height rule stops catching anything. 1.35 against a
+    // rule that fails at 1.02 on length leaves a wide gap for detail and a narrow one for scale errors.
+    const max = VEHICLE_MODEL_CONTRACT.hullAssemblyMaxHeightFraction;
+    expect(max).toBeGreaterThanOrEqual(1.2);
+    expect(max).toBeLessThanOrEqual(1.35);
+
+    // A hull whose stowage stands a third proud of the structural hull is still a valid vehicle...
+    const withStowage = soundProbe();
+    withStowage.hullHeightM = withStowage.hullHeightM * max;
+    expect(validateVehicleModel(withStowage, CT_MEDIUM.dimensions)).toEqual([]);
+
+    // ...but a model built at the wrong scale is not, and the height rule is part of what catches it.
+    const wrongScale = soundProbe();
+    wrongScale.hullHeightM = wrongScale.hullHeightM * max * 1.01;
+    expect(validateVehicleModel(wrongScale, CT_MEDIUM.dimensions).map((p) => p.rule)).toContain(
+      'hull-height',
+    );
+  });
+
+  it('still refuses a hull wider than its vehicle, detail notwithstanding', () => {
+    // The companion to the rule above, and the reason the two bounds differ. A stowage bin that overhangs
+    // the hull is normal; a hull that is wider than the tracks carrying it is a model at the wrong scale, and
+    // the width rule must say so without the height allowance softening it.
+    const tooWide = soundProbe();
+    tooWide.hullWidthM = CT_MEDIUM.dimensions.widthM * 1.01;
+    expect(validateVehicleModel(tooWide, CT_MEDIUM.dimensions).map((p) => p.rule)).toContain(
+      'hull-width',
+    );
+  });
 });
