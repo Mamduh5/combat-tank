@@ -31,6 +31,27 @@
  * scene a second way, which means this also covers the disposal path: a leaked mesh from the previous
  * vehicle shows up as a wrong mesh count on the next one.
  *
+ * ## It audits matchups, not just vehicles — because that is where the bug was
+ *
+ * V8 shipped a blocking bug that the 118-check per-vehicle walk could not see: choosing the same tank on
+ * both sides made **both tanks disappear**. The rig cache was keyed by model path and handed out live,
+ * scene-parented rigs, so both sides received the *same* nodes and the frame loop's second `apply()`
+ * won. The player's tank was drawn on the enemy's spawn, and the camera — which follows the player's
+ * simulated hull — showed bare ground.
+ *
+ * Nothing in the old walk could catch it, and that is the lesson worth keeping: every check it made was
+ * phrased about **one vehicle at a time**. The shared rig was perfectly valid by all of them. It had
+ * world matrices, it was enabled and visible, it satisfied the model contract, and its mesh count was
+ * within the disposal limit. It was simply the *same* rig as the other one, and no single-vehicle
+ * question can distinguish "correct" from "correct and shared".
+ *
+ * So the walk is now followed by a full 3x3 matchup matrix plus a selector sequence with restarts, and
+ * each matchup is asserted as a *pair*: two distinct rigs, two distinct roots, two distinct turrets, no
+ * shared mesh instances, both live and visible at once, each root standing at its own simulated vehicle,
+ * and wrecking one leaving the other painted and visible. Source templates and geometry buffers are
+ * deliberately allowed to be shared — they are immutable — so the assertions count *distinct live
+ * instances*, never "meshes in the scene".
+ *
  * Usage: `node tools/audit-assets.mjs [--json] [--vehicle <id>]`
  */
 
@@ -133,6 +154,182 @@ async function waitForGame(cdp, timeoutMs = 120000) {
 }
 
 // PART2
+/**
+ * The same-vehicle audit, evaluated inside the page.
+ *
+ * ## Why the per-vehicle audit could not see this bug
+ *
+ * The roster walk below asks, for one vehicle at a time: is this model the right shape, scale, materials
+ * and grounding? Every one of those questions is answerable from `playerVisual` alone.
+ *
+ * The V8 blocking bug -- same vehicle on both sides makes both tanks disappear -- is a question about a
+ * *pair*, and the old walk never asked one. Worse, the failing state still satisfied every per-vehicle
+ * check it did ask: the shared rig had valid world matrices, was enabled and visible, had a correct
+ * model contract and a plausible mesh count. The player simply found nothing under the crosshair.
+ *
+ * So this pass asserts the pair properties directly, and deliberately counts **distinct** rigs. A shared
+ * source template or a shared geometry buffer is correct and expected; what must never happen is two
+ * `VehicleVisual`s resolving to the same live nodes, because the frame loop writes the opponent's pose
+ * onto the player's root second.
+ */
+const MATCHUP_EXPRESSION = `
+(() => {
+  const g = globalThis.__combatTank;
+  const out = { checks: [] };
+  const check = (name, ok, detail) => out.checks.push({ name, status: ok ? 'pass' : 'fail', detail });
+
+  const sim = g.simulation;
+  const scene = g.scene;
+  const playerVisual = g.playerVisual;
+  const targetVisual = g.targetVisual;
+
+  if (sim.target === null || targetVisual === null) {
+    check('the encounter has an opponent to audit', false, 'solo encounter');
+    return JSON.stringify(out);
+  }
+
+  const pRig = playerVisual.vehicleRig;
+  const tRig = targetVisual.vehicleRig;
+
+  // Pose both sides explicitly before measuring anything.
+  //
+  // Relying on the frame loop to have applied state is a race: the encounter is rebuilt asynchronously and
+  // the first pass can run before a single frame has posed the new rigs, which reads as both tanks sitting
+  // at the origin. Applying here makes the check deterministic and tests the claim directly -- "each rig
+  // shows its own vehicle" -- rather than "the loop has run recently".
+  playerVisual.apply(sim.vehicle.state, sim.vehicle.turretState, 1 / 60);
+  targetVisual.apply(sim.target.state, sim.target.turretState, 1 / 60);
+  g.scene.render();
+
+  // --- 1. Two distinct live rigs -----------------------------------------------------------
+  //
+  // The core assertion. Every field below was the *same object* in the failing build, and each is
+  // reported individually so a regression names the exact field that started being shared.
+  out.playerVehicle = sim.vehicle.definition.displayName;
+  out.opponentVehicle = sim.target.definition.displayName;
+  out.ids = { player: sim.vehicle.definition.id, opponent: sim.target.definition.id };
+  out.sameVehicle = sim.vehicle.definition.id === sim.target.definition.id;
+
+  check('the two sides are separate simulation vehicles',
+    sim.vehicle !== sim.target && sim.vehicle.state !== sim.target.state,
+    'player and opponent state objects are distinct');
+  check('the two sides are separate rigs', pRig !== tRig, 'rig objects are distinct');
+  check('the two sides have separate root nodes', pRig.root !== tRig.root,
+    'root node ids ' + pRig.root.uniqueId + ' vs ' + tRig.root.uniqueId);
+  check('the two sides have separate turrets', pRig.turret !== tRig.turret,
+    'turret node ids ' + pRig.turret.uniqueId + ' vs ' + tRig.turret.uniqueId);
+  check('the two sides have separate guns', pRig.gun !== tRig.gun,
+    'gun node ids ' + pRig.gun.uniqueId + ' vs ' + tRig.gun.uniqueId);
+
+  // Counting *distinct* meshes, not meshes in the scene. Shared geometry buffers are correct; shared
+  // mesh instances are not.
+  const pMeshes = new Set(pRig.meshes);
+  const tMeshes = new Set(tRig.meshes);
+  const shared = [...pMeshes].filter((m) => tMeshes.has(m)).length;
+  out.sharedMeshes = shared;
+  check('the two sides share no mesh instances', shared === 0,
+    shared + ' shared of ' + pMeshes.size + '/' + tMeshes.size + ' meshes');
+
+  // --- 2. Both live and visible at the same time ---------------------------------------------
+  const pLive = pRig.meshes.filter((m) => scene.meshes.indexOf(m) !== -1 && m.isEnabled() && m.isVisible);
+  const tLive = tRig.meshes.filter((m) => scene.meshes.indexOf(m) !== -1 && m.isEnabled() && m.isVisible);
+  out.visibleMeshes = { player: pLive.length, opponent: tLive.length, rigSize: pRig.meshes.length };
+  check('both tanks are in the scene, enabled and visible',
+    pLive.length === pRig.meshes.length && tLive.length === tRig.meshes.length,
+    pLive.length + '/' + pRig.meshes.length + ' player, ' + tLive.length + '/' + tRig.meshes.length + ' opponent');
+
+  // --- 3. Each root is at its own vehicle ------------------------------------------------------
+  //
+  // This is the assertion that states the reported symptom directly. With one shared root the two rigs
+  // report the *same* position, equal to whichever side's apply() ran last -- the enemy's.
+  pRig.root.computeWorldMatrix(true);
+  tRig.root.computeWorldMatrix(true);
+  const pw = pRig.root.getAbsolutePosition();
+  const tw = tRig.root.getAbsolutePosition();
+  const separation = Math.hypot(pw.x - tw.x, pw.z - tw.z);
+  out.roots = {
+    player: { x: +pw.x.toFixed(2), z: +pw.z.toFixed(2) },
+    opponent: { x: +tw.x.toFixed(2), z: +tw.z.toFixed(2) },
+    separationM: +separation.toFixed(2),
+  };
+  check('the two tanks are drawn at different places', separation > 5,
+    separation.toFixed(1) + ' m apart (' + pw.x.toFixed(1) + ',' + pw.z.toFixed(1) +
+    ' vs ' + tw.x.toFixed(1) + ',' + tw.z.toFixed(1) + ')');
+
+  // Each root must sit at its own simulated vehicle, not merely somewhere different. In XZ this is
+  // exact: the model origin differs from the hull origin only vertically, by the ride height.
+  const pSim = sim.vehicle.state.position;
+  const tSim = sim.target.state.position;
+  out.rootMatchesSimulation = {
+    player: +Math.hypot(pw.x - pSim.x, pw.z - pSim.z).toFixed(2),
+    opponent: +Math.hypot(tw.x - tSim.x, tw.z - tSim.z).toFixed(2),
+  };
+  check('each tank is drawn at its own simulated vehicle',
+    out.rootMatchesSimulation.player < 2 && out.rootMatchesSimulation.opponent < 2,
+    'player off by ' + out.rootMatchesSimulation.player + ' m, opponent off by ' +
+    out.rootMatchesSimulation.opponent + ' m');
+
+  // --- 4. Turrets are independent ---------------------------------------------------------------
+  const tTurretBefore = tRig.turret.rotation.y;
+  const pTurret = pRig.turret.rotation.y;
+  pRig.turret.rotation.y = pTurret + 0.37;
+  const tTurretAfter = tRig.turret.rotation.y;
+  out.turrets = { player: +pTurret.toFixed(4), opponent: +tTurretBefore.toFixed(4) };
+  check('moving the player turret does not move the opponent turret', tTurretAfter === tTurretBefore,
+    'opponent turret y held at ' + tTurretBefore.toFixed(4) + ' while the player moved');
+  // Restored, so the frame loop and the screenshots see the pose the simulation asked for.
+  pRig.turret.rotation.y = pTurret;
+
+  // --- 5. Destroying one leaves the other alone -------------------------------------------------
+  //
+  // setDestroyed swaps each of *its own* meshes onto a cloned charred material, and disposal frees
+  // materials *and their textures*. With a shared rig, wrecking or disposing one tank took the other's
+  // paint with it. So the assertion is on the **player's** material ids: wrecking the opponent must not
+  // change a single one of them.
+  const pMaterialsBefore = pRig.meshes.map((m) => (m.material ? m.material.uniqueId : 0));
+  const tMaterialsBefore = tRig.meshes.map((m) => (m.material ? m.material.uniqueId : 0));
+  let wreckError = '';
+  try {
+    targetVisual.setDestroyed(true);
+    g.scene.render();
+  } catch (error) {
+    wreckError = String((error && error.message) || error);
+  }
+  check('wrecking the opponent did not throw', wreckError === '', wreckError || 'no error');
+
+  const pMaterialsAfter = pRig.meshes.map((m) => (m.material ? m.material.uniqueId : 0));
+  const changed = pMaterialsBefore.filter((id, i) => id !== pMaterialsAfter[i]).length;
+  out.playerMaterialsChanged = changed;
+  check('wrecking the opponent does not repaint the player', changed === 0,
+    changed + ' of ' + pMaterialsBefore.length + ' player materials changed');
+
+  // And the wreck must actually have applied to the opponent, or the check above proves nothing. The
+  // opponent's own materials are *supposed* to change here.
+  const tMaterialsWrecked = tRig.meshes.map((m) => (m.material ? m.material.uniqueId : 0));
+  const tChanged = tMaterialsBefore.filter((id, i) => id !== tMaterialsWrecked[i]).length;
+  out.opponentMaterialsChanged = tChanged;
+  check('wrecking the opponent really did change its own paint', tChanged > 0,
+    tChanged + ' of ' + tMaterialsBefore.length + ' opponent materials changed');
+
+  let restoreError = '';
+  try {
+    targetVisual.setDestroyed(false);
+    g.scene.render();
+  } catch (error) {
+    restoreError = String((error && error.message) || error);
+  }
+  check('restoring the opponent did not throw', restoreError === '', restoreError || 'no error');
+
+  const pRestored = pRig.meshes.map((m) => (m.material ? m.material.uniqueId : 0));
+  const pStill = pRig.meshes.filter((m) => scene.meshes.indexOf(m) !== -1 && m.isEnabled() && m.isVisible);
+  check('the player is untouched after the opponent was wrecked and restored',
+    pRestored.join(',') === pMaterialsBefore.join(',') && pStill.length === pRig.meshes.length,
+    pStill.length + '/' + pRig.meshes.length + ' player meshes visible, materials unchanged');
+
+  return JSON.stringify(out);
+})()
+`;
+
 /**
  * The structural audit, evaluated inside the page.
  *
@@ -791,16 +988,16 @@ async function main() {
      * Mirror matchups (`x` against `x`) so that the destruction check always has an opponent, whatever the
      * vehicle under test.
      */
-    async function selectVehicle(vehicleId) {
+    async function selectVehicle(vehicleId, opponentId = vehicleId) {
       const switched = await cdp.send('Runtime.evaluate', {
         expression:
           `globalThis.__combatTank.selectVehicle(${JSON.stringify(vehicleId)}, ` +
-          `${JSON.stringify(vehicleId)}).then(() => 'ok', (e) => 'failed: ' + String((e && e.message) || e))`,
+          `${JSON.stringify(opponentId)}).then(() => 'ok', (e) => 'failed: ' + String((e && e.message) || e))`,
         returnByValue: true,
         awaitPromise: true,
       });
       if (switched.result.value !== 'ok') {
-        pageErrors.push(`selectVehicle(${vehicleId}): ${switched.result.value}`);
+        pageErrors.push(`selectVehicle(${vehicleId}, ${opponentId}): ${switched.result.value}`);
         return false;
       }
       // Model loading and scene settling under SwiftShader. Generous, because a too-short wait here reads as
@@ -808,6 +1005,26 @@ async function main() {
       // ignore the tool.
       await sleep(4000);
       return true;
+    }
+
+    /**
+     * Runs the same-vehicle pass against whatever matchup is currently loaded.
+     *
+     * Split out for the same reason as `auditCurrentVehicle`: the matchup matrix calls this nine times,
+     * and duplicating the `Runtime.evaluate` plumbing inside a loop would mean a change to how a result
+     * is reported had to be made twice.
+     */
+    async function auditCurrentMatchup(label) {
+      const evaluated = await cdp.send('Runtime.evaluate', {
+        expression: MATCHUP_EXPRESSION,
+        returnByValue: true,
+      });
+      if (evaluated.exceptionDetails) {
+        throw new Error(
+          `The matchup audit threw for ${label}: ${JSON.stringify(evaluated.exceptionDetails).slice(0, 600)}`,
+        );
+      }
+      return JSON.parse(evaluated.result.value);
     }
 
     // --- The roster walk ---
@@ -840,6 +1057,70 @@ async function main() {
       const { auditResult, fireResult } = await auditCurrentVehicle();
       allChecks.push(...auditResult.checks, ...fireResult.checks);
       scenes.push({ ...auditResult.scene, firing: fireResult });
+    }
+
+    // --- The matchup matrix ---
+    //
+    // The per-vehicle walk above asks "is this model right?". This asks "are these *two* vehicles
+    // different?", which is the question the V8 same-vehicle bug lived in and which no amount of
+    // single-vehicle auditing can reach.
+    //
+    // All nine cells are run because it is inexpensive: the models are already cached, so each cell is a
+    // reselect plus a short settle. The three mirror cells are the ones that failed; the six off-diagonal
+    // ones are here to prove the fix did not regress the default case, which is what the player sees on
+    // every launch.
+    const matchups = [];
+    for (const player of vehicles) {
+      for (const opponent of vehicles) {
+        const label = `${player.name} vs ${opponent.name}`;
+        process.stdout.write(`  matchup ${label}...\n`);
+        if (!(await selectVehicle(player.id, opponent.id))) {
+          continue;
+        }
+        const result = await auditCurrentMatchup(label);
+        // Tagged with the matchup, because a failing run prints every check and
+        // "the two sides share no mesh instances" is not actionable without knowing which cell it was.
+        for (const c of result.checks) {
+          allChecks.push({ ...c, name: `[${label}] ${c.name}` });
+        }
+        matchups.push({ label, player: player.id, opponent: opponent.id, ...result });
+      }
+    }
+
+    // --- The selector sequence ---
+    //
+    // Construction and lifecycle are different failures. A mirror matchup selected once proves the rig is
+    // built correctly; it says nothing about whether *switching* to and from it returns something alive.
+    // That is where a cache hands out a disposed instance, so the sequence is driven explicitly, with a
+    // restart in the middle, exactly as a player switching vehicles would drive it.
+    const SEQUENCE = [
+      { player: vehicles[0].id, opponent: vehicles[1 % vehicles.length].id, restart: false },
+      { player: vehicles[0].id, opponent: vehicles[0].id, restart: true },
+      { player: vehicles[2 % vehicles.length].id, opponent: vehicles[0].id, restart: false },
+      { player: vehicles[2 % vehicles.length].id, opponent: vehicles[2 % vehicles.length].id, restart: true },
+      { player: vehicles[1 % vehicles.length].id, opponent: vehicles[1 % vehicles.length].id, restart: false },
+    ];
+    process.stdout.write('  selector sequence...\n');
+    for (const [index, step] of SEQUENCE.entries()) {
+      const label = `sequence step ${index} (${step.player} vs ${step.opponent})`;
+      if (!(await selectVehicle(step.player, step.opponent))) {
+        continue;
+      }
+      const result = await auditCurrentMatchup(label);
+      for (const c of result.checks) {
+        allChecks.push({ ...c, name: `[${label}] ${c.name}` });
+      }
+      if (step.restart) {
+        // A restart rebuilds both visuals from the cached model, which is precisely the path that used to
+        // return disposed nodes. Restarting through `selectVehicle` re-runs the whole encounter teardown.
+        const restarted = await selectVehicle(step.player, step.opponent);
+        if (restarted) {
+          const afterRestart = await auditCurrentMatchup(`${label} after restart`);
+          for (const c of afterRestart.checks) {
+            allChecks.push({ ...c, name: `[${label} after restart] ${c.name}` });
+          }
+        }
+      }
     }
 
     // --- Disposal ---
@@ -876,6 +1157,7 @@ async function main() {
       passed: failed.length === 0 && pageErrors.length === 0,
       vehicles: vehicles.map((v) => v.id),
       scenes,
+      matchups,
       checks: allChecks,
       pageErrors,
     };

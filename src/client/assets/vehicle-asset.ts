@@ -61,56 +61,36 @@ import {
   type VehicleModelProbe,
 } from '../../shared/vehicle-model-contract.js';
 import { assetUrl, VEHICLE_MODELS } from './asset-manifest.js';
+import {
+  TRACK_PATTERN,
+  VEHICLE_NODE_NAMES,
+  WHEEL_PATTERN,
+  instantiateVehicleRig,
+  type VehicleRig,
+  type VehicleSource,
+  type VehicleTrackSegment,
+  type VehicleWheel,
+} from './vehicle-rig-instance.js';
 
 /**
- * Node names the loader resolves. Declared as constants so a typo is a compile error rather than a silently
- * missing turret found at runtime, and so the contract has one authoritative spelling.
+ * Node names, rig types and the sharing contract all live in `vehicle-rig-instance.ts`.
+ *
+ * They are re-exported here because this is the module the client has always imported them from, and
+ * the loader and the instantiation step are two halves of one pipeline: it would be a false economy to
+ * make every caller reach past the loader to learn what a rig is. The definitions themselves live
+ * where they can be tested without a network fetch, which is the point of splitting them out.
  */
-export const VEHICLE_NODE_NAMES = {
-  root: 'Tank',
-  hull: 'Hull',
-  turret: 'Turret',
-  gun: 'Gun',
-  muzzle: 'Muzzle',
-} as const;
-
-/** Prefixes for the repeating parts. A model may have any number of each. */
-const WHEEL_PATTERN = /^(Wheel|Sprocket|Idler)([LR])(\d*)$/;
-const TRACK_PATTERN = /^Track([LR])(\d+)$/;
-
-/** One wheel or sprocket, spun about +X by distance travelled. */
-export interface VehicleWheel {
-  readonly node: TransformNode;
-  /** Radius in metres, taken from the node's own bound rather than assumed. */
-  readonly radiusM: number;
-}
-
-/** One track segment, offset vertically each frame to follow the ground. */
-export interface VehicleTrackSegment {
-  readonly node: TransformNode;
-  /** Which side of the vehicle this segment is on: âˆ’1 left, +1 right. */
-  readonly side: number;
-  /** The node's authored Y, so the conforming pass measures a residual against a known baseline. */
-  readonly authoredY: number;
-  /** Half the segment's height: the distance from the node's centre down to its contact face. */
-  readonly halfHeightM: number;
-}
-
-/** A loaded vehicle, resolved into the parts the renderer drives. */
-export interface VehicleRig {
-  /** Root node. The renderer sets its position and rotation from simulation state and nothing else. */
-  readonly root: TransformNode;
-  readonly hull: TransformNode;
-  readonly turret: TransformNode;
-  readonly gun: TransformNode;
-  readonly muzzle: TransformNode;
-  readonly wheels: readonly VehicleWheel[];
-  readonly tracks: readonly VehicleTrackSegment[];
-  /** Every mesh, so destruction tinting and shadow settings can be applied in one pass. */
-  readonly meshes: readonly AbstractMesh[];
-  /** Human-readable note about what the loader had to correct, for the debug overlay and the log. */
-  readonly normalisationNote: string;
-}
+export {
+  TRACK_PATTERN,
+  VEHICLE_NODE_NAMES,
+  VehicleRigError,
+  WHEEL_PATTERN,
+  instantiateVehicleRig,
+  type VehicleRig,
+  type VehicleSource,
+  type VehicleTrackSegment,
+  type VehicleWheel,
+} from './vehicle-rig-instance.js';
 
 /** Thrown when a model cannot satisfy the contract. Loud by design. */
 export class VehicleAssetError extends Error {
@@ -119,12 +99,58 @@ export class VehicleAssetError extends Error {
     this.name = 'VehicleAssetError';
   }
 }
-const rigCache = new Map<string, Promise<VehicleRig>>();
 
 /**
- * Loads and validates a vehicle model.
+ * The immutable half of a vehicle model: parsed once, shared by every live instance of that vehicle.
  *
- * @param scene the scene to load into
+ * ## Why this type exists at all
+ *
+ * The bug this fixes was a cache that handed out **live** rigs. It was keyed by `scene:modelPath`
+ * and stored the resolved, scene-parented, mutable `VehicleRig` itself, so a second
+ * `loadVehicleRig` for the same vehicle returned the *same* `TransformNode`s. Two same-type tanks
+ * then drove one set of transforms: the opponent's `apply()` ran second each frame and overwrote
+ * the hull pose, so the player's tank was drawn on the enemy's spawn while the camera — which
+ * follows the player's simulated hull — showed bare ground. Both tanks "disappeared".
+ *
+ * Nothing about that failure was loud. Both rigs reported healthy world matrices, `isVisible` and
+ * `isEnabled` were true, the model contract passed, and no assertion anywhere asked whether the two
+ * vehicles had *different nodes*.
+ *
+ * So the cache now holds a `VehicleSource`: the parsed model, its resolved part names and its
+ * measurements, with **no live transform state and no scene parenting**. It is a recipe, not a
+ * tank. Every {@link loadVehicleRig} call builds a fresh live rig from it, so any number of tanks
+ * of one type can exist at once and disposing one can never affect another.
+ *
+ * Sharing is still real, and it is shared at exactly the right level:
+ *
+ * | Shared (immutable)          | Per live instance                    |
+ * | -------------------------- | ------------------------------------ |
+ * | the parsed model, geometry  | the driver root and every posed node |
+ * | the vehicle definition      | hull/turret/gun transforms           |
+ * | texture *source data*      | the material set (wreck tint mutates)|
+ * | resolved names, measurements | texture offsets (track scroll)     |
+ *
+ * Babylon reference-counts geometry, so a cloned mesh shares vertex buffers and disposing one
+ * instance cannot free buffers another instance is still drawing.
+ */
+
+/**
+ * Scene-scoped cache of parsed models, keyed `scene.uniqueId:modelPath`.
+ *
+ * Keyed by scene because a template holds Babylon nodes bound to one scene, and reusing them across
+ * scenes would silently reparent live meshes.
+ */
+const sourceCache = new Map<string, Promise<VehicleSource>>();
+
+/**
+ * Loads a vehicle model and returns a **new live rig** for it.
+ *
+ * The returned rig owns its nodes outright: it is never shared with, or handed out to, any other
+ * vehicle. Two calls for the same vehicle in one scene produce two independent, independently
+ * disposable, independently poseable rigs -- which is what a mirror matchup needs and what the
+ * previous cache made impossible.
+ *
+ * @param scene the scene to instantiate into
  * @param definition the vehicle whose `visualId` selects the model
  */
 export function loadVehicleRig(scene: Scene, definition: VehicleDefinition): Promise<VehicleRig> {
@@ -133,40 +159,42 @@ export function loadVehicleRig(scene: Scene, definition: VehicleDefinition): Pro
     return Promise.reject(
       new VehicleAssetError(
         `no model is registered for visualId '${definition.visualId}'. Add it to VEHICLE_MODELS in ` +
-          `asset-manifest.ts â€” that map is the vehicle-to-model binding, and V8 depends on it being data.`,
+          `asset-manifest.ts — that map is the vehicle-to-model binding, and V8 depends on it being data.`,
       ),
     );
   }
 
-  // Scene-scoped cache. Keyed by scene id because a rig holds Babylon nodes bound to one scene, and reusing
-  // them across scenes would silently reparent live meshes.
   const cacheKey = `${scene.uniqueId}:${relativePath}`;
-  const cached = rigCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
+  const cached = sourceCache.get(cacheKey);
+  const sourcePromise =
+    cached ??
+    loadSource(scene, relativePath, definition).catch((error: unknown) => {
+      // A failed load must not poison the cache: a transient network error should be retryable.
+      sourceCache.delete(cacheKey);
+      throw error;
+    });
+  if (cached === undefined) {
+    sourceCache.set(cacheKey, sourcePromise);
   }
 
-  const promise = loadUncached(scene, relativePath, definition).catch((error: unknown) => {
-    // A failed load must not poison the cache: a transient network error should be retryable.
-    rigCache.delete(cacheKey);
-    throw error;
-  });
-  rigCache.set(cacheKey, promise);
-  return promise;
+  // Instantiation is deliberately *not* cached and deliberately *not* memoised per caller. Every
+  // request is a distinct live vehicle, and handing the same one out twice is the bug.
+  return sourcePromise.then((source) => instantiateVehicleRig(source));
 }
+
 /**
  * The meshes that make up a part: the node itself if Babylon fused it into a mesh, plus its descendants.
  *
  * `container.meshes.filter((m) => m.parent === node)` looks equivalent and is not. Babylon turns a glTF
- * node that carries geometry into an `AbstractMesh`, and a part like the hull is a *leaf* — it has no
+ * node that carries geometry into an `AbstractMesh`, and a part like the hull is a *leaf* -- it has no
  * child nodes at all, because the hull is one mesh. Its only parent is the model root. So the "meshes
  * directly under the hull" list comes back empty, and everything measured from it is zero.
  *
  * That is not a harmless edge case. It made the scale normalisation silently do nothing: it measured a hull
- * length of 0, skipped its correction, and reported "none needed" — so a model 26% shorter than the
+ * length of 0, skipped its correction, and reported "none needed" -- so a model 26% shorter than the
  * simulation's own collision box rendered without a word of complaint, and every type check passed.
  *
- * Module scope rather than local to `loadUncached`, because the model-contract probe needs it too, and
+ * Module scope rather than local to `loadSource`, because the model-contract probe needs it too, and
  * there is no reason for two measurements of "the meshes under this node" to be able to disagree.
  */
 const meshesOf = (node: TransformNode): AbstractMesh[] => {
@@ -180,7 +208,7 @@ const meshesOf = (node: TransformNode): AbstractMesh[] => {
   return found;
 };
 
-async function loadUncached(scene: Scene, relativePath: string, definition: VehicleDefinition): Promise<VehicleRig> {
+async function loadSource(scene: Scene, relativePath: string, definition: VehicleDefinition): Promise<VehicleSource> {
   const url = assetUrl(relativePath);
   const container = await LoadAssetContainerAsync(url, scene);
 
@@ -375,9 +403,11 @@ async function loadUncached(scene: Scene, relativePath: string, definition: Vehi
     }
   }
 
-  // Everything the file declares is parented under the model's own root, so disposing the rig is a single
-  // call and no part can escape. Iterating `allNodes` rather than `container.transformNodes` matters here as
-  // everywhere else: every part with geometry is an AbstractMesh, not a TransformNode.
+  /**
+   * Everything the file declares is parented under the model's own root, so disposing a rig is a single
+   * call and no part can escape. Iterating `allNodes` rather than `container.transformNodes` matters here as
+   * everywhere else: every part with geometry is an AbstractMesh, not a TransformNode.
+   */
   for (const node of allNodes) {
     if (node !== gltfRoot && node.parent === null) {
       node.parent = gltfRoot;
@@ -398,21 +428,26 @@ async function loadUncached(scene: Scene, relativePath: string, definition: Vehi
   );
   if (problems.length > 0) {
     throw new VehicleAssetError(
-      `${relativePath} does not satisfy the vehicle model contract:\n` +
+      `${relativePath} does not satisfy the model contract:\n` +
         formatModelContractProblems(problems) +
         `\n\nSee docs/model-contract.md for each rule and why it exists.`,
     );
   }
 
+  // --- Hand the parsed model over as a *source*, not as a live vehicle ------------------------
+  //
+  // `container.removeAllToScene()` is the load-bearing line. The template keeps its geometry,
+  // materials and node hierarchy, but leaves `scene.meshes`, so it is never drawn and never
+  // evaluated — a tank-shaped blueprint that costs nothing to keep and can be instantiated any
+  // number of times. Each `instantiateRig` clones it into the scene, where it *is* drawn.
+  //
+  // Leaving the template in the scene would put a third, invisible-until-cloned tank at the origin
+  // and would make the audit's mesh counts meaningless; disposing it would defeat the cache.
+  container.removeAllFromScene();
+
   return {
-    root: driver,
-    hull,
-    turret,
-    gun,
-    muzzle,
-    wheels,
-    tracks,
-    meshes: container.meshes,
+    templateRoot: driver,
+    vehicleId: definition.id,
     normalisationNote: notes.length === 0 ? 'none needed' : notes.join('; '),
   };
 }
@@ -554,39 +589,43 @@ export function wheelRadiusM(wheel: VehicleWheel): number {
   return wheel.radiusM;
 }
 
-/** Clears the rig cache. Only for tests and for a hard reload that must not reuse live nodes. */
+/** Clears the cached sources. Only for tests and for a hard reload that must re-read every model. */
 export function clearVehicleRigCache(): void {
-  rigCache.clear();
+  sourceCache.clear();
 }
 
 /**
- * Forgets one cached rig, so the next `loadVehicleRig` for it builds a fresh one.
+ * Forgets the cached **source** for a model, so the next `loadVehicleRig` re-reads the file.
  *
- * ## Why disposing a visual must call this
+ * ## Why disposal no longer has to call this
  *
- * The cache exists so two vehicles sharing a model (a player and an opponent on the same definition) reuse
- * one set of meshes rather than loading it twice. But `VehicleVisual.dispose` frees those meshes — and the
- * cache kept handing out the *disposed* rig to the next caller.
+ * This function, and {@link releaseVehicleRigFor} below, used to be load-bearing. The cache held live
+ * rigs, and `VehicleVisual.dispose` frees those very nodes, so a cache that kept handing out a disposed
+ * rig produced an invisible tank: no exception, no type error, nothing on screen.
  *
- * That is precisely the bug V8's roster made reachable, and it is why the audit reports "0 meshes" for the
- * second and third vehicle in the walk: the rig was cached, disposed with the previous encounter, and then
- * served again, so the tank existed as a set of destroyed Babylon nodes. Before V8 there was exactly one
- * vehicle and one encounter, so nothing ever asked for a rig twice and the cache could not be wrong.
+ * That whole hazard is gone, and it is gone *structurally* rather than by remembering to call
+ * something in the right order. The cache now holds an immutable {@link VehicleSource} that no caller
+ * ever receives and no disposal can reach, so freeing a live rig cannot corrupt the cache — and two
+ * tanks of one type no longer collide. Releasing is therefore only about memory and reload cost.
  *
- * The failure mode is nasty precisely because it is quiet: no exception, no type error, and a vehicle that
- * renders nothing. So disposal and caching are now explicitly linked — a rig is a *shared* resource, and a
- * shared resource cannot be freed while something still holds a reference to it.
+ * It is still exported because it is the right way to reclaim a template, and because `main.ts`
+ * releasing on every vehicle switch keeps the resident set to what is actually on screen.
+ *
+ * @param scene the scene the cached template belongs to
+ * @param relativePath the model path, as it appears in `VEHICLE_MODELS`
  */
 export function releaseVehicleRig(scene: Scene, relativePath: string): void {
-  rigCache.delete(`${scene.uniqueId}:${relativePath}`);
+  sourceCache.delete(`${scene.uniqueId}:${relativePath}`);
 }
 
 /**
- * Releases the cached rig for a vehicle, by the `visualId` its definition carries.
+ * Releases the cached source for a vehicle, by the `visualId` its definition carries.
  *
- * The counterpart to `loadVehicleRig` from the caller's side: disposal happens in `VehicleVisual`, which
- * knows nothing about the manifest or the cache, so the two are joined here rather than in either of them.
- * `main.ts` calls this alongside `visual.dispose()` when an encounter is torn down.
+ * The counterpart to `loadVehicleRig` from the caller's side: the manifest and the cache live here, so
+ * `main.ts` does not need to know how a `VehicleDefinition` maps onto a model file.
+ *
+ * @param scene the scene the cached template belongs to
+ * @param definition the vehicle whose cached template should be forgotten
  */
 export function releaseVehicleRigFor(scene: Scene, definition: VehicleDefinition): void {
   const relativePath = VEHICLE_MODELS[definition.visualId as keyof typeof VEHICLE_MODELS];

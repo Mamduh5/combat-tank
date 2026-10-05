@@ -239,9 +239,13 @@ const hud = new Hud();
    * standing in the same place. `VehicleVisual.dispose` exists for exactly this.
    */
   async function startEncounter(playerVehicleId: string, opponentVehicleId: string): Promise<void> {
-// Release the rigs *before* disposing the visuals, because the cache still holds a reference to the very
-    // nodes being freed. Without this the next encounter is handed destroyed Babylon nodes and renders an
-    // invisible tank — no exception, no failed assertion, just nothing on screen. See `releaseVehicleRigFor`.
+    // The cached model sources are released here to keep the resident set to what is actually on screen.
+    //
+    // This is a *memory* decision now, not a correctness one. The cache used to hold live rigs, so it had to
+    // be emptied before the visuals were disposed or it would hand out destroyed Babylon nodes and render an
+    // invisible tank. It now holds immutable sources that no disposal can reach, so disposal order no longer
+    // matters -- but releasing keeps a re-selected vehicle's model from sitting resident for the rest of the
+    // session. See `VehicleSource` in vehicle-asset.ts.
     releaseVehicleRigFor(scene, encounter.simulation.vehicle.definition);
     if (encounter.simulation.target !== null) {
       releaseVehicleRigFor(scene, encounter.simulation.target.definition);
